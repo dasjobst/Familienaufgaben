@@ -23,15 +23,15 @@ test('Oberfläche rendert alle Ansichten für Eltern und Kind ohne Fehler', asyn
   globalThis.document = {
     getElementById: el, querySelectorAll: () => [], querySelector: () => null, activeElement: null, hidden: false,
     addEventListener: (t, f) => { (handlers[t] ||= []).push(f); },
-    createElement: () => ({ setAttribute() {}, remove() {}, style: {} }), body: { appendChild() {} }
+    createElement: () => ({ setAttribute() {}, remove() {}, appendChild() {}, style: {} }), body: { appendChild() {} }
   };
   const mem = { t: owner };
   globalThis.localStorage = { getItem: () => mem.t, setItem: (k, v) => { mem.t = v; }, removeItem: () => { mem.t = null; } };
   globalThis.location = { hash: '', pathname: '/' }; globalThis.history = { replaceState() {} };
   globalThis.window = { scrollTo() {} };
   globalThis.fetch = async (url, o = {}) => handle(new Request('https://x' + url, o), { store, env });
-  globalThis.setTimeout = (f) => 0;
-  const click = target => handlers.click.forEach(f => f({ target: { closest: s => (s === '[data-tab]' ? target.tab : target.act) ? { dataset: s === '[data-tab]' ? { tab: target.tab } : { act: target.act, id: target.id } } : null } }));
+  globalThis.setTimeout = (f) => 0; globalThis.setInterval = () => 0;
+  const click = target => handlers.click.forEach(f => f({ target: { closest: s => (s === '[data-tab]' ? target.tab : target.act) ? { hasAttribute: () => false, dataset: s === '[data-tab]' ? { tab: target.tab } : { act: target.act, id: target.id } } : null } }));
   const settle = () => new Promise(r => setImmediate(r));
 
   await import('../public/app.js?parent');
@@ -42,8 +42,8 @@ test('Oberfläche rendert alle Ansichten für Eltern und Kind ohne Fehler', asyn
   }
   click({ tab: 'catalog' });
   click({ act: 'catNew' });
-  assert.match(els.layer.innerHTML, /Verantwortung/); assert.match(els.layer.innerHTML, /Fester Wochentag/); assert.match(els.layer.innerHTML, /Checkliste/);
-  assert.match(els.app.innerHTML, /Jedes Kind/);
+  assert.match(els.layer.innerHTML, /Verantwortung/); assert.match(els.layer.innerHTML, /Fester Wochentag/); assert.match(els.layer.innerHTML, /Checkliste/); assert.ok(els.layer.innerHTML.includes('<details class="adv"'), 'Erweitert-Bereich');
+  click({ act: 'closeNothing' });
 
   // Kind: kein Eltern-Zubehör
   mem.t = kidTok;

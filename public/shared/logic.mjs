@@ -80,7 +80,7 @@ function str(v, max) { return String(v == null ? '' : v).trim().slice(0, max); }
 
 // Neue Familie: ein Elternteil, Standardkatalog mit gestaffelter Vorgeschichte.
 export function createState(ownerName, ownerEmail) {
-  S = { v: 2, seq: 0, bonus: 1.5, members: [], catalog: [], inst: [], ledger: [] };
+  S = { v: 2, seq: 0, bonus: 1.5, penalty: 0.5, members: [], catalog: [], inst: [], ledger: [] };
   const owner = { id: uid('m'), name: str(ownerName, 40), role: 'parent', email: str(ownerEmail, 120).toLowerCase() };
   S.members.push(owner);
   SEED_CATALOG.forEach((r, i) => {
@@ -127,8 +127,42 @@ function dueAfter(c, last, fresh) {
   const ld = laterOf(last ? last.doneAt : null, c.snooze);
   return ld ? addDays(ld, c.interval) : fresh;
 }
+const UNDO_MS = 2 * 60 * 1000;
+function penaltyFactor() { return (S.penalty === undefined || S.penalty === null) ? 0.5 : S.penalty; }
+function penaltyAmount(i) {
+  const base = pointsFor(i), f = penaltyFactor();
+  return (f <= 0 || base <= 0) ? 0 : Math.max(1, Math.round(base * f));
+}
+function applyPenalty(i, times) {
+  const amount = penaltyAmount(i) * times;
+  if (times <= 0 || amount <= 0 || !i.assignee || !memberById(i.assignee)) return;
+  S.ledger.push({ id: uid('l'), member: i.assignee, delta: -amount, text: 'Verpasst: ' + catById(i.catId).name + (times > 1 ? ' (' + times + '×)' : ''), date: today(), kind: 'missed', n: times, inst: i.id });
+}
+// Überfällige Aufgaben: einmal Strafpunkte. Kurze Intervalle (bis 3 Tage) rollen weiter und zählen jeden verpassten Termin.
+function settleMissed() {
+  let changed = 0;
+  S.inst = S.inst.filter(i => {
+    if (i.status === 'done' || i.status === 'review') return true;
+    const od = diffDays(today(), i.due); if (od < 1) return true;
+    const c = catById(i.catId); if (!c) return true;
+    const roll = c.interval >= 1 && c.interval <= 3 && (c.weekday === null || c.weekday === undefined);
+    if (roll && od >= c.interval) {
+      applyPenalty(i, Math.min(14, Math.floor(od / c.interval)) - (i.penalized ? 1 : 0));
+      changed++; return false;
+    }
+    if (!i.penalized && i.assignee) { applyPenalty(i, 1); i.penalized = true; changed++; }
+    return true;
+  });
+  return changed;
+}
+export function missedStats(memberId, days) {
+  let n = 0, pts = 0;
+  S.ledger.forEach(l => { if (l.kind === 'missed' && l.member === memberId && diffDays(today(), l.date) <= (days || 30)) { n += l.n || 1; pts += -l.delta; } });
+  return { n, pts };
+}
+
 export function refreshPool() {
-  let n = 0;
+  let n = settleMissed();
   S.catalog.forEach(c => {
     if (c.archived || !c.interval) return;
     const each = !!(c.resp && c.resp.mode === 'each');
@@ -207,11 +241,24 @@ export function release(instId, by) {
   return ok('Zurück im Pool.');
 }
 function finish(i) {
-  const pts = pointsFor(i);
+  const pts = pointsFor(i), prev = i.status, before = new Set(S.inst.map(x => x.id));
   i.status = 'done'; i.doneAt = today(); i.points = pts; i.log.push('Erledigt');
-  S.ledger.push({ id: uid('l'), member: i.assignee, delta: pts, text: catById(i.catId).name + (i.mode === 'booked' ? ' (gebucht)' : ' (zugewiesen)'), date: today() });
+  const lid = uid('l');
+  S.ledger.push({ id: lid, member: i.assignee, delta: pts, text: catById(i.catId).name + (i.mode === 'booked' ? ' (gebucht)' : ' (zugewiesen)'), date: today(), inst: i.id });
   refreshPool();
+  i.undo = { at: Date.now(), ledgerId: lid, prev, next: S.inst.filter(x => !before.has(x.id)).map(x => x.id) };
   return pts;
+}
+export function undo(instId, by) {
+  const i = instById(instId);
+  if (!i || i.status !== 'done' || !i.undo) return err('Das lässt sich nicht mehr rückgängig machen.');
+  if (!(by === i.assignee || isParent(by))) return err('Nur die zuständige Person oder Eltern dürfen das rückgängig machen.');
+  if (Date.now() - i.undo.at > UNDO_MS) return err('Die Frist zum Rückgängigmachen (2 Minuten) ist abgelaufen.');
+  S.ledger = S.ledger.filter(l => l.id !== i.undo.ledgerId);
+  const drop = new Set(i.undo.next || []);
+  S.inst = S.inst.filter(x => !(drop.has(x.id) && x.status !== 'done' && x.log.length <= 1));
+  i.status = i.undo.prev; delete i.doneAt; delete i.points; i.log.push('Rückgängig gemacht'); delete i.undo;
+  return ok('Rückgängig gemacht.');
 }
 export function complete(instId, by) {
   const i = instById(instId); if (!i) return err('Aufgabe nicht gefunden.');
@@ -223,14 +270,14 @@ export function complete(instId, by) {
     return ok('Gemeldet. Jetzt prüft ein Elternteil.', { review: true });
   }
   const pts = finish(i);
-  return ok('+' + pts + ' Punkte für ' + memberById(i.assignee).name + '.', { pts });
+  return ok('+' + pts + ' Punkte für ' + memberById(i.assignee).name + '.', { pts, undo: i.id });
 }
 export function approve(instId, by) {
   if (!isParent(by)) return err('Nur Eltern dürfen den Check bestätigen.');
   const i = instById(instId); if (!i) return err('Aufgabe nicht gefunden.');
   if (i.status !== 'review') return err('Diese Aufgabe wartet nicht auf einen Check.');
   const pts = finish(i);
-  return ok('Check bestanden: +' + pts + ' Punkte für ' + memberById(i.assignee).name + '.', { pts });
+  return ok('Check bestanden: +' + pts + ' Punkte für ' + memberById(i.assignee).name + '.', { pts, undo: i.id });
 }
 export function reject(instId, note, by) {
   if (!isParent(by)) return err('Nur Eltern dürfen den Check ablehnen.');
@@ -246,9 +293,11 @@ export function deleteInst(instId, by) {
   const i = instById(instId); if (!i) return err('Aufgabe nicht gefunden.');
   if (i.status === 'done') return err('Erledigte Aufgaben bleiben erhalten, sie stehen in der Punktehistorie.');
   const c = catById(i.catId);
+  const refunded = S.ledger.some(l => l.kind === 'missed' && l.inst === instId);
+  S.ledger = S.ledger.filter(l => !(l.kind === 'missed' && l.inst === instId));
   S.inst = S.inst.filter(x => x.id !== instId);
   if (c) c.snooze = today();
-  return ok('Aufgabe gelöscht' + (c && c.interval ? '. Das Intervall startet heute neu.' : '.'));
+  return ok('Aufgabe gelöscht' + (refunded ? ', Strafpunkte entfallen' : '') + (c && c.interval ? '. Das Intervall startet heute neu.' : '.'));
 }
 export function escalations() {
   return S.inst.filter(i => i.status !== 'done' && i.status !== 'review' && diffDays(i.due, today()) < 0)
@@ -316,6 +365,20 @@ export function setPhotoMeta(memberId, by, on, stamp) {
   if (!(by === memberId || isParent(by))) return err('Nur die Person selbst oder Eltern dürfen das Foto ändern.');
   if (on) m.photoV = stamp || Date.now(); else delete m.photoV;
   return ok(on ? 'Foto gespeichert.' : 'Foto entfernt.');
+}
+export function assignOverdueOpen(toId, by) {
+  if (!isParent(by)) return err('Nur Eltern dürfen zuweisen.');
+  if (!memberById(toId)) return err('Person nicht gefunden.');
+  let n = 0;
+  S.inst.forEach(i => {
+    if (i.status === 'open' && diffDays(i.due, today()) < 0) { i.status = 'taken'; i.assignee = toId; i.mode = 'assigned'; i.log.push('Zugewiesen von ' + memberById(by).name + ' an ' + memberById(toId).name); n++; }
+  });
+  return n ? ok(n + (n === 1 ? ' Aufgabe' : ' Aufgaben') + ' an ' + memberById(toId).name + ' zugewiesen.') : err('Es gibt keine unverteilten überfälligen Aufgaben.');
+}
+export function setPenalty(v, by) {
+  if (!isParent(by)) return err('Nur Eltern dürfen die Strafpunkte ändern.');
+  const n = Number(v); if (!(n >= 0 && n <= 2)) return err('Der Faktor muss zwischen 0 und 2 liegen.');
+  S.penalty = Math.round(n * 10) / 10; return ok(S.penalty === 0 ? 'Strafpunkte ausgeschaltet.' : 'Strafpunkte: ×' + S.penalty);
 }
 export function setBonus(v, by) {
   if (!isParent(by)) return err('Nur Eltern dürfen den Bonus ändern.');

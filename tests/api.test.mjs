@@ -295,3 +295,103 @@ test('Freitagabend-Check: Kind meldet, Eltern bestätigen oder lehnen ab', async
   assert.equal(wk.inst.find(i => i.catId === chk.id && i.assignee === nik && i.status !== 'done').due, '2026-11-27');
   L.setNow('2026-11-14');
 });
+
+const ledgerOf = (st, id) => st.ledger.filter(l => l.member === id);
+const sum = list => list.reduce((a, l) => a + l.delta, 0);
+
+test('Strafpunkte: überfällige zugewiesene Aufgabe kostet einmal, Unverteiltes kostet nichts', async () => {
+  const { call, owner } = await setupFamily();
+  const nik = await addMember(call, owner, 'Nikolas', 'child', '');
+  const cat = await call('POST', '/action', { token: owner, body: { type: 'saveCat', data: { name: 'Garage fegen', interval: 14, min: 20 } } });
+  const c = cat.json.state.catalog.find(x => x.name === 'Garage fegen'); // 4 Punkte, Strafe 2
+  const as = await call('POST', '/action', { token: owner, body: { type: 'assignNew', cat: c.id, to: nik, due: '2026-11-15' } });
+  assert.equal(as.json.ok, true);
+  L.setNow('2026-11-17');
+  const s1 = (await call('GET', '/state', { token: owner })).json.state;
+  const pen = ledgerOf(s1, nik).filter(l => l.kind === 'missed' && l.text.includes('Garage'));
+  assert.equal(pen.length, 1); assert.equal(pen[0].delta, -2);
+  const s2 = (await call('GET', '/state', { token: owner })).json.state;
+  assert.equal(ledgerOf(s2, nik).filter(l => l.text.includes('Garage')).length, 1, 'nicht doppelt');
+  assert.ok(s2.inst.some(i => i.catId === c.id && i.status === 'taken'), 'bleibt auf dem Board');
+  // unverteilte Pool-Aufgaben: keine Strafe
+  assert.equal(s2.ledger.filter(l => l.kind === 'missed' && !s2.members.some(m => m.id === l.member)).length, 0);
+  L.setNow('2026-11-14');
+});
+
+test('Verpasste Tagesaufgaben rollen weiter und zählen jeden Termin', async () => {
+  const { call, owner } = await setupFamily();
+  const nik = await addMember(call, owner, 'Nikolas', 'child', '');
+  const bett = (await call('GET', '/state', { token: owner })).json.state.catalog.find(c => c.name === 'Bett machen');
+  L.setNow('2026-11-17'); // 3 Tage später
+  const st = (await call('GET', '/state', { token: owner })).json.state;
+  L.setNow('2026-11-14');
+  const mine = ledgerOf(st, nik).filter(l => l.kind === 'missed');
+  assert.equal(mine.length, 1); assert.equal(mine[0].n, 3); assert.equal(mine[0].delta, -3);
+  const act = st.inst.filter(i => i.catId === bett.id && i.assignee === nik && i.status !== 'done');
+  assert.equal(act.length, 1, 'genau eine neue Aufgabe'); assert.equal(act[0].due, '2026-11-17');
+});
+
+test('Eltern löschen überfällige Aufgabe: Strafpunkte entfallen', async () => {
+  const { call, owner } = await setupFamily();
+  const nik = await addMember(call, owner, 'Nikolas', 'child', '');
+  const c = (await call('POST', '/action', { token: owner, body: { type: 'saveCat', data: { name: 'Garage fegen', interval: 14, min: 20 } } })).json.state.catalog.find(x => x.name === 'Garage fegen');
+  await call('POST', '/action', { token: owner, body: { type: 'assignNew', cat: c.id, to: nik, due: '2026-11-15' } });
+  L.setNow('2026-11-17');
+  const st = (await call('GET', '/state', { token: owner })).json.state;
+  assert.equal(sum(ledgerOf(st, nik).filter(l => l.text.includes('Garage'))), -2);
+  const inst = st.inst.find(i => i.catId === c.id);
+  const del = await call('POST', '/action', { token: owner, body: { type: 'deleteInst', id: inst.id } });
+  L.setNow('2026-11-14');
+  assert.equal(del.json.ok, true); assert.match(del.json.msg, /Strafpunkte entfallen/);
+  assert.equal(ledgerOf(del.json.state, nik).filter(l => l.text.includes('Garage')).length, 0);
+});
+
+test('Strafpunkte einstellbar, nur Eltern, Bereich 0 bis 2', async () => {
+  const { call, owner } = await setupFamily();
+  const nik = await addMember(call, owner, 'Nikolas', 'child', '');
+  const kid = (await login(call, owner, nik)).token;
+  assert.equal((await call('POST', '/action', { token: kid, body: { type: 'setPenalty', value: 0 } })).json.ok, false);
+  assert.equal((await call('POST', '/action', { token: owner, body: { type: 'setPenalty', value: 3 } })).json.ok, false);
+  assert.equal((await call('POST', '/action', { token: owner, body: { type: 'setPenalty', value: 0 } })).json.ok, true);
+  L.setNow('2026-11-17');
+  const st = (await call('GET', '/state', { token: owner })).json.state;
+  L.setNow('2026-11-14');
+  assert.equal(st.ledger.filter(l => l.kind === 'missed').length, 0, 'bei Faktor 0 keine Strafe');
+});
+
+test('Rückgängig: nur kurz nach dem Erledigen, nur Zuständige oder Eltern', async () => {
+  const { call, owner } = await setupFamily();
+  const nik = await addMember(call, owner, 'Nikolas', 'child', '');
+  const jak = await addMember(call, owner, 'Jakob', 'child', '');
+  const a = (await login(call, owner, nik)).token, b = (await login(call, owner, jak)).token;
+  const open = (await call('GET', '/state', { token: a })).json.state.inst.find(i => i.status === 'open');
+  await call('POST', '/action', { token: a, body: { type: 'book', id: open.id } });
+  const done = await call('POST', '/action', { token: a, body: { type: 'complete', id: open.id } });
+  assert.equal(done.json.undo, open.id);
+  assert.ok(sum(ledgerOf(done.json.state, nik)) > 0);
+  assert.equal((await call('POST', '/action', { token: b, body: { type: 'undo', id: open.id } })).json.ok, false, 'fremdes Kind');
+  const u = await call('POST', '/action', { token: a, body: { type: 'undo', id: open.id } });
+  assert.equal(u.json.ok, true);
+  assert.equal(sum(ledgerOf(u.json.state, nik)), 0);
+  assert.equal(u.json.state.inst.find(i => i.id === open.id).status, 'taken');
+  // nach Ablauf der Frist nicht mehr
+  await call('POST', '/action', { token: a, body: { type: 'complete', id: open.id } });
+  const real = Date.now; Date.now = () => real() + 3 * 60e3;
+  try { assert.equal((await call('POST', '/action', { token: a, body: { type: 'undo', id: open.id } })).json.ok, false); } finally { Date.now = real; }
+});
+
+test('Sammelzuweisung unverteilter überfälliger Aufgaben', async () => {
+  const { call, owner } = await setupFamily();
+  const nik = await addMember(call, owner, 'Nikolas', 'child', '');
+  const kid = (await login(call, owner, nik)).token;
+  assert.equal((await call('POST', '/action', { token: owner, body: { type: 'assignOverdue', to: nik } })).json.ok, false, 'nichts überfällig');
+  L.setNow('2026-11-16');
+  const st = (await call('GET', '/state', { token: owner })).json.state;
+  const unclaimed = st.inst.filter(i => i.status === 'open' && i.due < '2026-11-16');
+  assert.ok(unclaimed.length > 0, 'es gibt unverteilte überfällige');
+  assert.equal((await call('POST', '/action', { token: kid, body: { type: 'assignOverdue', to: nik } })).json.ok, false, 'Kinder dürfen nicht');
+  const r = await call('POST', '/action', { token: owner, body: { type: 'assignOverdue', to: nik } });
+  L.setNow('2026-11-14');
+  assert.equal(r.json.ok, true);
+  assert.ok(unclaimed.every(u => r.json.state.inst.find(i => i.id === u.id)?.assignee === nik));
+});

@@ -153,7 +153,8 @@ function modal(title, bodyHtml, submitLabel, onSubmit, danger) {
   $('ov').addEventListener('click', e => { if (e.target.id === 'ov') close(); });
   $('mf').addEventListener('submit', async e => {
     e.preventDefault();
-    const fd = Object.fromEntries(new FormData(e.target).entries());
+    const fd = {};
+    for (const [k, v] of new FormData(e.target).entries()) { if (k in fd) fd[k] = [].concat(fd[k], v); else fd[k] = v; }
     const res = await onSubmit(fd);
     if (res && res.ok === false) return;
     close();
@@ -179,6 +180,7 @@ function taskCard(i) {
   else pts = '<span class="pts">' + L.pointsFor(i) + ' Pkt</span>';
   let state;
   if (i.status === 'open') state = 'Im Pool · <span class="' + (late ? 'late' : '') + '">' + L.dueText(i.due) + '</span>';
+  else if (i.status === 'review') state = '<span class="who">' + avatar(w, 'sm') + '<b>' + esc(w ? w.name : '?') + '</b></span> · gemeldet, wartet auf den Check durch Eltern';
   else state = '<span class="who">' + avatar(w, 'sm') + '<b>' + esc(w ? w.name : '?') + '</b></span> · ' + (i.mode === 'booked' ? 'selbst gebucht' : 'zugewiesen') + ' · <span class="' + (late ? 'late' : '') + '">' + L.dueText(i.due) + '</span>';
   let a = '';
   if (i.status === 'open') {
@@ -186,27 +188,31 @@ function taskCard(i) {
     if (isParent()) a += '<button class="btn small" data-act="assignPick" data-id="' + esc(i.id) + '">Zuweisen an …</button>';
   } else if (i.status === 'taken') {
     if (me === i.assignee || isParent()) {
-      a += '<button class="btn primary small" data-act="complete" data-id="' + esc(i.id) + '">Erledigt</button>';
+      a += '<button class="btn primary small" data-act="complete" data-id="' + esc(i.id) + '">' + (c.check && !isParent() ? 'Fertig melden' : 'Erledigt') + '</button>';
       a += '<button class="btn small" data-act="transferPick" data-id="' + esc(i.id) + '">Übertragen</button>';
     }
     if (i.mode === 'booked' && me === i.assignee && !late) a += '<button class="btn small" data-act="release" data-id="' + esc(i.id) + '">Zurück in Pool</button>';
   }
+  if (i.status === 'review' && isParent()) a += '<button class="btn primary small" data-act="approve" data-id="' + esc(i.id) + '">Check bestanden</button><button class="btn small" data-act="rejectPick" data-id="' + esc(i.id) + '">Nicht bestanden</button>';
   if (isParent() && i.status !== 'done') a += '<button class="btn small danger" data-act="instDelete" data-id="' + esc(i.id) + '">Löschen</button>';
   return '<article class="card' + (late ? ' late' : '') + '"><div class="top"><h3>' + esc(c.name) + '</h3>' + pts + '</div>' +
-    '<div class="meta"><span class="chip">' + esc(c.cat) + '</span>' + (c.room ? '<span>' + esc(c.room) + '</span>' : '') + '<span>' + c.min + ' Min.</span><span>' + L.freqLabel(c.interval) + '</span></div>' +
-    '<div class="state">' + state + '</div>' + (a ? '<div class="actions">' + a + '</div>' : '') + '</article>';
+    '<div class="meta"><span class="chip">' + esc(c.cat) + '</span>' + (c.room ? '<span>' + esc(c.room) + '</span>' : '') + '<span>' + c.min + ' Min.</span><span>' + (c.weekday !== null && c.weekday !== undefined ? 'jeden ' + L.weekdayLabel(c.weekday) : L.freqLabel(c.interval)) + '</span></div>' +
+    '<div class="state">' + state + '</div>' + (c.items && c.items.length ? '<div class="hint">Check: ' + c.items.map(esc).join(' · ') + '</div>' : '') + (a ? '<div class="actions">' + a + '</div>' : '') + '</article>';
 }
 
 function viewTasks() {
   const open = S.inst.filter(i => i.status === 'open').sort((a, b) => a.due < b.due ? -1 : 1);
-  const mine = S.inst.filter(i => i.status === 'taken' && i.assignee === me).sort((a, b) => a.due < b.due ? -1 : 1);
-  const others = S.inst.filter(i => i.status === 'taken' && i.assignee !== me).sort((a, b) => a.due < b.due ? -1 : 1);
+  const mine = S.inst.filter(i => (i.status === 'taken' || i.status === 'review') && i.assignee === me).sort((a, b) => a.due < b.due ? -1 : 1);
+  const others = S.inst.filter(i => (i.status === 'taken' || i.status === 'review') && i.assignee !== me).sort((a, b) => a.due < b.due ? -1 : 1);
   const done = S.inst.filter(i => i.status === 'done' && !i.seed).sort((a, b) => a.doneAt < b.doneAt ? 1 : -1).slice(0, 8);
-  let h = '<section><div class="sec-h"><h2>Meine Aufgaben</h2><span class="count">' + mine.length + '</span></div>' + (mine.length ? mine.map(taskCard).join('') : '<div class="empty">Nichts offen. Buche eine Aufgabe aus dem Pool und sammle mehr Punkte als bei einer Zuweisung.</div>') + '</section>';
+  const reviews = isParent() ? S.inst.filter(i => i.status === 'review' && i.assignee !== me) : [];
+  let h = reviews.length ? '<section><div class="sec-h"><h2>Wartet auf Check</h2><span class="count">' + reviews.length + '</span></div>' + reviews.map(taskCard).join('') + '</section>' : '';
+  h += '<section><div class="sec-h"><h2>Meine Aufgaben</h2><span class="count">' + mine.length + '</span></div>' + (mine.length ? mine.map(taskCard).join('') : '<div class="empty">Nichts offen. Buche eine Aufgabe aus dem Pool und sammle mehr Punkte als bei einer Zuweisung.</div>') + '</section>';
   h += '<section><div class="sec-h"><h2>Pool</h2><span class="count">' + open.length + '</span></div>';
   if (isParent()) h += '<div class="actions"><button class="btn small" data-act="assignNew">+ Aufgabe zuweisen</button></div>';
   h += (open.length ? open.map(taskCard).join('') : '<div class="empty">Der Pool ist leer. Neue Aufgaben entstehen, sobald Intervalle ablaufen.</div>') + '</section>';
-  if (others.length) h += '<section><div class="sec-h"><h2>Bei anderen</h2><span class="count">' + others.length + '</span></div>' + others.map(taskCard).join('') + '</section>';
+  const others2 = others.filter(i => !(isParent() && i.status === 'review'));
+  if (others2.length) h += '<section><div class="sec-h"><h2>Bei anderen</h2><span class="count">' + others2.length + '</span></div>' + others2.map(taskCard).join('') + '</section>';
   h += '<section><div class="sec-h"><h2>Zuletzt erledigt</h2></div>' + (done.length ? '<div class="log">' + done.map(i => '<div><span>' + esc(L.catById(i.catId) ? L.catById(i.catId).name : '?') + ' · ' + esc(L.memberById(i.assignee) ? L.memberById(i.assignee).name : '?') + '</span><span class="d">+' + i.points + '</span></div>').join('') + '</div>' : '<div class="empty">Noch nichts erledigt.</div>') + '</section>';
   return h;
 }
@@ -226,13 +232,13 @@ function viewCatalog() {
     if (b !== last) { h += '<h3 class="band">' + b + '</h3>'; last = b; }
     const act = L.activeInst(c.id);
     h += '<article class="card"><div class="top"><h3>' + esc(c.name) + (c.archived ? ' (archiviert)' : '') + '</h3><span class="pts">' + c.pts + ' Pkt</span></div>' +
-      '<div class="meta"><span class="chip">' + esc(c.cat) + '</span>' + (c.origin === 'familie' ? '<span class="chip fam">Familie</span>' : '') + (c.room ? '<span>' + esc(c.room) + '</span>' : '') + '<span>' + c.min + ' Min.</span><span>' + L.freqLabel(c.interval) + '</span></div>';
+      '<div class="meta"><span class="chip">' + esc(c.cat) + '</span>' + (c.origin === 'familie' ? '<span class="chip fam">Familie</span>' : '') + '<span class="chip fam">' + esc(L.respLabel(c)) + '</span>' + (c.check ? '<span class="chip fam">Check</span>' : '') + (c.room ? '<span>' + esc(c.room) + '</span>' : '') + '<span>' + c.min + ' Min.</span><span>' + (c.weekday !== null && c.weekday !== undefined ? 'jeden ' + L.weekdayLabel(c.weekday) : L.freqLabel(c.interval)) + '</span></div>' + (c.items && c.items.length ? '<div class="hint">Check: ' + c.items.map(esc).join(' · ') + '</div>' : '');
     if (parent) {
       h += '<div class="actions">';
       if (c.archived) h += '<button class="btn small" data-act="catRestore" data-id="' + esc(c.id) + '">Wiederherstellen</button>';
       else {
         h += '<button class="btn small" data-act="catEdit" data-id="' + esc(c.id) + '">Bearbeiten</button>';
-        if (!act) h += '<button class="btn small" data-act="catEnqueue" data-id="' + esc(c.id) + '">In den Pool</button>';
+        if (!act && !(c.resp && c.resp.mode === 'each')) h += '<button class="btn small" data-act="catEnqueue" data-id="' + esc(c.id) + '">In den Pool</button>';
         h += '<button class="btn small danger" data-act="catDelete" data-id="' + esc(c.id) + '">Löschen</button>';
       }
       h += '</div>';
@@ -306,12 +312,18 @@ function render() {
 
 function catForm(c) {
   c = c || { name: '', cat: '', room: '', interval: 7, min: 15, pts: '' };
+  const r = c.resp && c.resp.mode === 'each' ? c.resp.who : 'pool', sel = (c.resp && c.resp.ids) || [];
   const cats = [...new Set(S.catalog.map(x => x.cat))].sort();
   return '<div class="field"><label for="f_name">Name der Tätigkeit</label><input id="f_name" name="name" required maxlength="80" value="' + esc(c.name) + '"></div>' +
     '<div class="grid2"><div class="field"><label for="f_cat">Kategorie</label><input id="f_cat" name="cat" list="catlist" maxlength="40" value="' + esc(c.cat) + '"><datalist id="catlist">' + cats.map(x => '<option value="' + esc(x) + '">').join('') + '</datalist></div>' +
     '<div class="field"><label for="f_room">Raum</label><input id="f_room" name="room" maxlength="40" value="' + esc(c.room) + '"></div></div>' +
     '<div class="grid2"><div class="field"><label for="f_int">Intervall in Tagen</label><input id="f_int" name="interval" type="number" min="0" value="' + c.interval + '"><span class="hint">0 = nur manuell. 1 täglich, 7 wöchentlich, 30 monatlich.</span></div>' +
     '<div class="field"><label for="f_min">Aufwand in Minuten</label><input id="f_min" name="min" type="number" min="1" value="' + c.min + '"></div></div>' +
+    '<div class="field"><label for="f_resp">Verantwortung</label><select id="f_resp" name="resp">' + [['pool', 'Pool: wer will, bucht'], ['all', 'Jede Person einzeln: alle'], ['children', 'Jede Person einzeln: nur Kinder'], ['parents', 'Jede Person einzeln: nur Eltern'], ['custom', 'Jede Person einzeln: Auswahl unten']].map(o => '<option value="' + o[0] + '"' + (o[0] === r ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>' +
+    '<div class="meta">' + S.members.map(m => '<label><input type="checkbox" name="ids" value="' + esc(m.id) + '"' + (sel.includes(m.id) ? ' checked' : '') + '> ' + esc(m.name) + '</label>').join('') + '</div><span class="hint">Beim Einzelmodus bekommt jede zuständige Person ihre eigene Aufgabe, zum Beispiel Bett machen.</span></div>' +
+    '<div class="grid2"><div class="field"><label for="f_wd">Fester Wochentag</label><select id="f_wd" name="weekday"><option value="">Kein fester Tag</option>' + [[1, 'Montag'], [2, 'Dienstag'], [3, 'Mittwoch'], [4, 'Donnerstag'], [5, 'Freitag'], [6, 'Samstag'], [0, 'Sonntag']].map(o => '<option value="' + o[0] + '"' + (c.weekday === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select><span class="hint">Setzt das Intervall auf wöchentlich.</span></div>' +
+    '<div class="field"><label for="f_chk">Check durch Eltern</label><label><input id="f_chk" type="checkbox" name="check"' + (c.check ? ' checked' : '') + '> Punkte erst nach Bestätigung</label></div></div>' +
+    '<div class="field"><label for="f_items">Checkliste (eine Zeile pro Punkt)</label><textarea id="f_items" name="items" rows="3" style="background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px;width:100%;font:inherit;color:inherit">' + esc((c.items || []).join('\n')) + '</textarea></div>' +
     '<div class="field"><label for="f_pts">Punkte</label><input id="f_pts" name="pts" type="number" min="1" value="' + (c.pts || '') + '" placeholder="leer = Aufwand ÷ 5"></div>';
 }
 function memForm(m) {
@@ -332,7 +344,11 @@ document.addEventListener('click', async e => {
   if (a === 'book') act('book', { id });
   else if (a === 'complete') act('complete', { id });
   else if (a === 'release') act('release', { id });
-  else if (a === 'instDelete') {
+  else if (a === 'approve') act('approve', { id });
+  else if (a === 'rejectPick') {
+    const i = L.instById(id), c = L.catById(i.catId);
+    modal('Check nicht bestanden', '<p>„' + esc(c.name) + '“ geht an ' + esc(L.memberById(i.assignee).name) + ' zurück.</p><div class="field"><label for="r_n">Hinweis (optional)</label><input id="r_n" name="note" maxlength="120" placeholder="z. B. Boden noch nicht gesaugt"></div>', 'Zurückgeben', fd => act('reject', { id, note: fd.note }));
+  } else if (a === 'instDelete') {
     const i = L.instById(id), c = L.catById(i.catId), w = i.assignee ? L.memberById(i.assignee) : null;
     modal('Aufgabe löschen', '<p>„' + esc(c.name) + '“' + (w ? ' bei ' + esc(w.name) : ' im Pool') + ' endgültig entfernen? Es werden keine Punkte vergeben. Das Intervall der Tätigkeit startet heute neu.</p>', 'Löschen', () => act('deleteInst', { id }), true);
   }

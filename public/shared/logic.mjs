@@ -60,7 +60,9 @@ const SEED_CATALOG = [
   ['Keller und Garage ausmisten', 'Müll & Entsorgung', 'Keller', 365, 120],
   ['Gartengeräte warten', 'Garten & Außen', 'Garten', 365, 45],
   ['Versicherungen und Verträge prüfen', 'Verwaltung', 'Büro', 365, 60],
-  ['Zählerstände ablesen', 'Verwaltung', 'Keller', 365, 10]
+  ['Zählerstände ablesen', 'Verwaltung', 'Keller', 365, 10],
+  ['Bett machen', 'Wohnräume', 'Schlafzimmer', 1, 5, { resp: { mode: 'each', who: 'all', ids: [] } }],
+  ['Freitagabend-Check: Zimmer aufgeräumt und gesaugt', 'Wohnräume', 'Kinderzimmer', 7, 30, { resp: { mode: 'each', who: 'children', ids: [] }, weekday: 5, check: true, items: ['Zimmer aufgeräumt', 'Zimmer gesaugt'] }]
 ];
 
 function uid(p) { S.seq++; return p + S.seq; }
@@ -83,7 +85,9 @@ export function createState(ownerName, ownerEmail) {
   S.members.push(owner);
   SEED_CATALOG.forEach((r, i) => {
     const c = { id: uid('c'), name: r[0], cat: r[1], room: r[2], interval: r[3], min: r[4], pts: Math.max(1, Math.round(r[4] / 5)), origin: 'standard', archived: false };
+    Object.assign(c, r[5] || {});
     S.catalog.push(c);
+    if (c.resp && c.resp.mode === 'each') return;
     const off = (i * 5) % (c.interval + 3);
     S.inst.push({ id: uid('i'), catId: c.id, status: 'done', assignee: owner.id, mode: 'booked', due: addDays(today(), -off), doneAt: addDays(today(), -off), points: 0, seed: true, log: [] });
   });
@@ -93,20 +97,56 @@ export function createState(ownerName, ownerEmail) {
 
 function laterOf(a, b) { return !a ? (b || null) : !b ? a : (a > b ? a : b); }
 const HORIZON = 3;
+function weekdayOf(s) { const p = s.split('-').map(Number); return new Date(Date.UTC(p[0], p[1] - 1, p[2])).getUTCDay(); }
+function nextWeekday(from, wd) { let d = from; for (let k = 0; k < 7; k++) { if (weekdayOf(d) === wd) return d; d = addDays(d, 1); } return from; }
+function lastDoneInst(catId, memberId) {
+  let l = null;
+  S.inst.forEach(i => { if (i.catId === catId && i.status === 'done' && (!memberId || i.assignee === memberId) && (!l || i.doneAt > l.doneAt)) l = i; });
+  return l;
+}
+// Wer ist für eine Tätigkeit je einzeln zuständig? Leer = Pool.
+export function targetsOf(c) {
+  const r = c.resp; if (!r || r.mode !== 'each') return [];
+  return S.members.filter(m => r.who === 'all' || (r.who === 'children' && m.role === 'child') || (r.who === 'parents' && m.role === 'parent') || (r.who === 'custom' && (r.ids || []).includes(m.id)));
+}
+export function respLabel(c) {
+  const r = c.resp; if (!r || r.mode !== 'each') return 'Pool';
+  if (r.who === 'all') return 'Jede Person'; if (r.who === 'children') return 'Jedes Kind'; if (r.who === 'parents') return 'Jedes Elternteil';
+  return (r.ids || []).map(id => (memberById(id) || { name: '?' }).name).join(', ') || 'Auswahl';
+}
+const WD = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+export function weekdayLabel(n) { return (n === null || n === undefined) ? '' : WD[n]; }
+function dueAfter(c, last, fresh) {
+  if (c.weekday !== null && c.weekday !== undefined) {
+    let base = last ? addDays(last.due, 1) : today();
+    if (c.snooze) { const sk = addDays(nextWeekday(c.snooze, c.weekday), 1); if (sk > base) base = sk; }
+    let d = nextWeekday(base, c.weekday);
+    if (diffDays(d, today()) < 0) d = nextWeekday(today(), c.weekday);
+    return d;
+  }
+  const ld = laterOf(last ? last.doneAt : null, c.snooze);
+  return ld ? addDays(ld, c.interval) : fresh;
+}
 export function refreshPool() {
   let n = 0;
   S.catalog.forEach(c => {
-    if (c.archived || !c.interval || activeInst(c.id)) return;
-    const last = laterOf(lastDone(c.id), c.snooze) || today();
-    const due = addDays(last, c.interval);
-    if (diffDays(due, today()) <= HORIZON) {
-      S.inst.push({ id: uid('i'), catId: c.id, status: 'open', assignee: null, mode: null, due: (diffDays(due, today()) < 0 ? today() : due), log: [] });
+    if (c.archived || !c.interval) return;
+    const each = !!(c.resp && c.resp.mode === 'each');
+    (each ? targetsOf(c) : [null]).forEach(m => {
+      const mid = m ? m.id : null;
+      if (S.inst.some(i => i.catId === c.id && i.status !== 'done' && (!each || i.assignee === mid))) return;
+      const due = dueAfter(c, lastDoneInst(c.id, mid), each ? today() : addDays(today(), c.interval));
+      if (diffDays(due, today()) > HORIZON) return;
+      const d = diffDays(due, today()) < 0 ? today() : due;
+      if (each) S.inst.push({ id: uid('i'), catId: c.id, status: 'taken', assignee: mid, mode: 'assigned', due: d, log: ['Automatisch zugewiesen'] });
+      else S.inst.push({ id: uid('i'), catId: c.id, status: 'open', assignee: null, mode: null, due: d, log: [] });
       n++;
-    }
+    });
   });
-  // Altlast begrenzen: je Tätigkeit bleibt die letzte erledigte Aufgabe, ältere erledigte nach 120 Tagen weg.
-  const keep = new Set();
-  S.catalog.forEach(c => { let best = null; S.inst.forEach(i => { if (i.catId === c.id && i.status === 'done' && (!best || i.doneAt > best.doneAt)) best = i; }); if (best) keep.add(best.id); });
+  // Altlast begrenzen: je Tätigkeit und Person bleibt die letzte erledigte Aufgabe, ältere erledigte nach 120 Tagen weg.
+  const best = {};
+  S.inst.forEach(i => { if (i.status !== 'done') return; const k = i.catId + '|' + i.assignee; if (!best[k] || i.doneAt > best[k].doneAt) best[k] = i; });
+  const keep = new Set(Object.values(best).map(i => i.id));
   const before = S.inst.length;
   S.inst = S.inst.filter(i => i.status !== 'done' || keep.has(i.id) || diffDays(today(), i.doneAt) <= 120);
   if (S.ledger.length > 500) S.ledger = S.ledger.slice(-500);
@@ -133,6 +173,7 @@ export function assignNew(catId, toId, due, by) {
   const c = catById(catId); if (!c) return err('Tätigkeit nicht gefunden.');
   if (!memberById(toId)) return err('Person nicht gefunden.');
   if (due && !isDate(due)) return err('Das Datum ist ungültig.');
+  if (c.resp && c.resp.mode === 'each') return err('Diese Tätigkeit wird automatisch an jede zuständige Person vergeben.');
   if (activeInst(catId)) return err('Diese Tätigkeit läuft bereits. Übertrage die bestehende Aufgabe.');
   S.inst.push({ id: uid('i'), catId, status: 'taken', assignee: toId, mode: 'assigned', due: due || addDays(today(), 2), log: ['Zugewiesen von ' + memberById(by).name + ' an ' + memberById(toId).name] });
   return ok('Zugewiesen an ' + memberById(toId).name + '.');
@@ -140,6 +181,7 @@ export function assignNew(catId, toId, due, by) {
 export function enqueue(catId, by) {
   if (!isParent(by)) return err('Nur Eltern dürfen Aufgaben in den Pool stellen.');
   const c = catById(catId); if (!c) return err('Tätigkeit nicht gefunden.');
+  if (c.resp && c.resp.mode === 'each') return err('Diese Tätigkeit wird automatisch an jede zuständige Person vergeben.');
   if (activeInst(catId)) return err('Diese Tätigkeit läuft bereits.');
   S.inst.push({ id: uid('i'), catId, status: 'open', assignee: null, mode: null, due: addDays(today(), 2), log: [] });
   return ok('In den Pool gestellt.');
@@ -164,15 +206,38 @@ export function release(instId, by) {
   i.status = 'open'; i.assignee = null; i.mode = null; i.log.push('Zurück in den Pool');
   return ok('Zurück im Pool.');
 }
-export function complete(instId, by) {
-  const i = instById(instId); if (!i) return err('Aufgabe nicht gefunden.');
-  if (i.status !== 'taken') return err('Diese Aufgabe ist nicht vergeben.');
-  if (!(by === i.assignee || isParent(by))) return err('Nur die zuständige Person oder Eltern dürfen abschließen.');
+function finish(i) {
   const pts = pointsFor(i);
   i.status = 'done'; i.doneAt = today(); i.points = pts; i.log.push('Erledigt');
   S.ledger.push({ id: uid('l'), member: i.assignee, delta: pts, text: catById(i.catId).name + (i.mode === 'booked' ? ' (gebucht)' : ' (zugewiesen)'), date: today() });
   refreshPool();
+  return pts;
+}
+export function complete(instId, by) {
+  const i = instById(instId); if (!i) return err('Aufgabe nicht gefunden.');
+  if (i.status !== 'taken') return err('Diese Aufgabe ist nicht vergeben.');
+  if (!(by === i.assignee || isParent(by))) return err('Nur die zuständige Person oder Eltern dürfen abschließen.');
+  const c = catById(i.catId);
+  if (c.check && !isParent(by)) {
+    i.status = 'review'; i.reportedAt = today(); i.log.push('Fertig gemeldet');
+    return ok('Gemeldet. Jetzt prüft ein Elternteil.', { review: true });
+  }
+  const pts = finish(i);
   return ok('+' + pts + ' Punkte für ' + memberById(i.assignee).name + '.', { pts });
+}
+export function approve(instId, by) {
+  if (!isParent(by)) return err('Nur Eltern dürfen den Check bestätigen.');
+  const i = instById(instId); if (!i) return err('Aufgabe nicht gefunden.');
+  if (i.status !== 'review') return err('Diese Aufgabe wartet nicht auf einen Check.');
+  const pts = finish(i);
+  return ok('Check bestanden: +' + pts + ' Punkte für ' + memberById(i.assignee).name + '.', { pts });
+}
+export function reject(instId, note, by) {
+  if (!isParent(by)) return err('Nur Eltern dürfen den Check ablehnen.');
+  const i = instById(instId); if (!i) return err('Aufgabe nicht gefunden.');
+  if (i.status !== 'review') return err('Diese Aufgabe wartet nicht auf einen Check.');
+  i.status = 'taken'; delete i.reportedAt; i.log.push('Check nicht bestanden' + (str(note, 120) ? ': ' + str(note, 120) : ''));
+  return ok('Zurück an ' + memberById(i.assignee).name + '.');
 }
 // Nur Eltern: nicht erledigte Aufgabe verwerfen. Das Intervall der Tätigkeit startet ab heute neu,
 // damit der Pool die Aufgabe nicht sofort wieder anlegt.
@@ -186,7 +251,7 @@ export function deleteInst(instId, by) {
   return ok('Aufgabe gelöscht' + (c && c.interval ? '. Das Intervall startet heute neu.' : '.'));
 }
 export function escalations() {
-  return S.inst.filter(i => i.status !== 'done' && diffDays(i.due, today()) < 0)
+  return S.inst.filter(i => i.status !== 'done' && i.status !== 'review' && diffDays(i.due, today()) < 0)
     .sort((a, b) => a.due < b.due ? -1 : a.due > b.due ? 1 : 0);
 }
 export function saveCat(data, by) {
@@ -197,14 +262,22 @@ export function saveCat(data, by) {
   const min = Math.min(1440, Math.max(1, Math.round(Number(data.min) || 0) || 1));
   let pts = Math.round(Number(data.pts)); if (!pts || pts < 1) pts = Math.max(1, Math.round(min / 5)); pts = Math.min(1000, pts);
   const cat = str(data.cat, 40) || 'Sonstiges', room = str(data.room, 40);
+  const respMode = ['pool', 'all', 'children', 'parents', 'custom'].includes(data.resp) ? data.resp : 'pool';
+  const ids = [].concat(data.ids || []).filter(id => memberById(id)).slice(0, 20);
+  if (respMode === 'custom' && !ids.length) return err('Bitte mindestens eine Person auswählen.');
+  const resp = respMode === 'pool' ? { mode: 'pool' } : { mode: 'each', who: respMode, ids: respMode === 'custom' ? ids : [] };
+  let weekday = (data.weekday === '' || data.weekday == null) ? null : Number(data.weekday);
+  if (weekday !== null && !(Number.isInteger(weekday) && weekday >= 0 && weekday <= 6)) weekday = null;
+  const check = data.check === 'on' || data.check === true;
+  const items = String(data.items || '').split('\n').map(x => x.trim().slice(0, 60)).filter(Boolean).slice(0, 10);
   const clash = S.catalog.find(c => c.name.toLowerCase() === name.toLowerCase() && c.id !== data.id && !c.archived);
   if (clash) return err('Es gibt schon eine Tätigkeit mit diesem Namen.');
   if (data.id) {
     const c = catById(data.id); if (!c) return err('Tätigkeit nicht gefunden.');
-    Object.assign(c, { name, cat, room, interval, min, pts });
+    Object.assign(c, { name, cat, room, interval: weekday !== null ? 7 : interval, min, pts, resp, weekday, check, items });
     return ok('Gespeichert.');
   }
-  S.catalog.push({ id: uid('c'), name, cat, room, interval, min, pts, origin: 'familie', archived: false });
+  S.catalog.push({ id: uid('c'), name, cat, room, interval: weekday !== null ? 7 : interval, min, pts, origin: 'familie', archived: false, resp, weekday, check, items });
   return ok('Zum Katalog hinzugefügt.');
 }
 export function removeCat(id, by) {

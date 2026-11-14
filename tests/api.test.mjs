@@ -226,3 +226,72 @@ test('Eltern löschen nicht erledigte Aufgaben, Kinder nicht, Erledigtes bleibt'
   L.setNow('2026-11-14');
   assert.ok(later.inst.some(i => i.catId === t1.catId && i.status === 'open'), 'nach dem Intervall wieder im Pool');
 });
+
+test('Verantwortung: Einzelmodus vergibt je Person eine eigene Aufgabe', async () => {
+  const { call, owner } = await setupFamily();
+  const nik = await addMember(call, owner, 'Nikolas', 'child', '');
+  const jak = await addMember(call, owner, 'Jakob', 'child', '');
+  const st = (await call('GET', '/state', { token: owner })).json.state;
+  const bett = st.catalog.find(c => c.name === 'Bett machen');
+  const mine = st.inst.filter(i => i.catId === bett.id && i.status !== 'done');
+  assert.equal(mine.length, 3, 'Jobst, Nikolas, Jakob je eine');
+  assert.deepEqual(new Set(mine.map(i => i.assignee)), new Set(st.members.map(m => m.id)));
+  assert.ok(mine.every(i => i.mode === 'assigned' && i.status === 'taken'));
+  // Keine Doppelten bei erneutem Laden
+  const again = (await call('GET', '/state', { token: owner })).json.state;
+  assert.equal(again.inst.filter(i => i.catId === bett.id && i.status !== 'done').length, 3);
+  // Jedes Kind erledigt nur seins und bekommt 1 Punkt (zugewiesen, ohne Bonus)
+  const kid = (await login(call, owner, nik)).token;
+  const nikInst = mine.find(i => i.assignee === nik), jakInst = mine.find(i => i.assignee === jak);
+  assert.equal((await call('POST', '/action', { token: kid, body: { type: 'complete', id: jakInst.id } })).json.ok, false);
+  const done = await call('POST', '/action', { token: kid, body: { type: 'complete', id: nikInst.id } });
+  assert.equal(done.json.pts, bett.pts);
+  // Einzelmodus-Tätigkeiten lassen sich nicht in den Pool stellen
+  assert.equal((await call('POST', '/action', { token: owner, body: { type: 'enqueue', id: bett.id } })).json.ok, false);
+  // Eigene Tätigkeit nur für Auswahl
+  const bad = await call('POST', '/action', { token: owner, body: { type: 'saveCat', data: { name: 'Hund füttern', interval: 1, min: 5, resp: 'custom', ids: [] } } });
+  assert.equal(bad.json.ok, false);
+  const good = await call('POST', '/action', { token: owner, body: { type: 'saveCat', data: { name: 'Hund füttern', interval: 1, min: 5, resp: 'custom', ids: [jak] } } });
+  assert.equal(good.json.ok, true);
+  const after = (await call('GET', '/state', { token: owner })).json.state;
+  const hund = after.catalog.find(c => c.name === 'Hund füttern');
+  assert.deepEqual(after.inst.filter(i => i.catId === hund.id).map(i => i.assignee), [jak]);
+});
+
+test('Freitagabend-Check: Kind meldet, Eltern bestätigen oder lehnen ab', async () => {
+  L.setNow('2026-11-18'); // Mittwoch, Freitag ist 2026-11-20
+  const store = memoryStore(); const call = client(store);
+  const owner = (await call('POST', '/setup', { body: { code: CODE, name: 'Jobst' } })).json.token;
+  const nik = await addMember(call, owner, 'Nikolas', 'child', '');
+  const kid = (await login(call, owner, nik)).token;
+  const st = (await call('GET', '/state', { token: kid })).json.state;
+  const chk = st.catalog.find(c => c.name.startsWith('Freitagabend-Check'));
+  assert.equal(chk.weekday, 5); assert.equal(chk.check, true); assert.equal(chk.items.length, 2);
+  const inst = st.inst.find(i => i.catId === chk.id && i.assignee === nik);
+  assert.ok(inst, 'Kind hat die Aufgabe'); assert.equal(inst.due, '2026-11-20');
+  assert.ok(!st.inst.some(i => i.catId === chk.id && i.assignee !== nik && i.status !== 'done'), 'Eltern bekommen sie nicht');
+  // Kind meldet fertig: keine Punkte, Status review
+  const rep = await call('POST', '/action', { token: kid, body: { type: 'complete', id: inst.id } });
+  assert.equal(rep.json.ok, true); assert.equal(rep.json.review, true);
+  assert.equal(rep.json.state.inst.find(i => i.id === inst.id).status, 'review');
+  assert.equal(rep.json.state.ledger.length, 0);
+  // Kind kann sich nicht selbst bestätigen
+  assert.equal((await call('POST', '/action', { token: kid, body: { type: 'approve', id: inst.id } })).json.ok, false);
+  // Überfällig zählt nicht, solange das Kind gemeldet hat
+  L.setNow('2026-11-22');
+  const late = (await call('GET', '/state', { token: owner })).json.state;
+  L.setNow('2026-11-18');
+  assert.ok(late.inst.some(i => i.id === inst.id && i.status === 'review'));
+  // Eltern lehnen ab, Kind meldet erneut, Eltern bestätigen
+  const rej = await call('POST', '/action', { token: owner, body: { type: 'reject', id: inst.id, note: 'Boden fehlt' } });
+  assert.equal(rej.json.ok, true); assert.equal(rej.json.state.inst.find(i => i.id === inst.id).status, 'taken');
+  await call('POST', '/action', { token: kid, body: { type: 'complete', id: inst.id } });
+  const ok = await call('POST', '/action', { token: owner, body: { type: 'approve', id: inst.id } });
+  assert.equal(ok.json.ok, true); assert.equal(ok.json.pts, chk.pts);
+  const next = ok.json.state.inst.find(i => i.catId === chk.id && i.assignee === nik && i.status !== 'done');
+  assert.equal(next, undefined, 'nächster Freitag liegt außerhalb des Vorlaufs');
+  L.setNow('2026-11-25');
+  const wk = (await call('GET', '/state', { token: owner })).json.state;
+  assert.equal(wk.inst.find(i => i.catId === chk.id && i.assignee === nik && i.status !== 'done').due, '2026-11-27');
+  L.setNow('2026-11-14');
+});

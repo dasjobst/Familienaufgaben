@@ -78,6 +78,7 @@ const ACTIONS = {
   transfer: (p, by) => L.transfer(p.id, p.to, by),
   release: (p, by) => L.release(p.id, by),
   complete: (p, by) => L.complete(p.id, by),
+  deleteInst: (p, by) => L.deleteInst(p.id, by),
   saveCat: (p, by) => L.saveCat(p.data, by),
   removeCat: (p, by) => L.removeCat(p.id, by),
   restoreCat: (p, by) => L.restoreCat(p.id, by),

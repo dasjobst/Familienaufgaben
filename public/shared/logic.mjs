@@ -91,12 +91,13 @@ export function createState(ownerName, ownerEmail) {
   return S;
 }
 
+function laterOf(a, b) { return !a ? (b || null) : !b ? a : (a > b ? a : b); }
 const HORIZON = 3;
 export function refreshPool() {
   let n = 0;
   S.catalog.forEach(c => {
     if (c.archived || !c.interval || activeInst(c.id)) return;
-    const last = lastDone(c.id) || today();
+    const last = laterOf(lastDone(c.id), c.snooze) || today();
     const due = addDays(last, c.interval);
     if (diffDays(due, today()) <= HORIZON) {
       S.inst.push({ id: uid('i'), catId: c.id, status: 'open', assignee: null, mode: null, due: (diffDays(due, today()) < 0 ? today() : due), log: [] });
@@ -172,6 +173,17 @@ export function complete(instId, by) {
   S.ledger.push({ id: uid('l'), member: i.assignee, delta: pts, text: catById(i.catId).name + (i.mode === 'booked' ? ' (gebucht)' : ' (zugewiesen)'), date: today() });
   refreshPool();
   return ok('+' + pts + ' Punkte für ' + memberById(i.assignee).name + '.', { pts });
+}
+// Nur Eltern: nicht erledigte Aufgabe verwerfen. Das Intervall der Tätigkeit startet ab heute neu,
+// damit der Pool die Aufgabe nicht sofort wieder anlegt.
+export function deleteInst(instId, by) {
+  if (!isParent(by)) return err('Nur Eltern dürfen Aufgaben löschen.');
+  const i = instById(instId); if (!i) return err('Aufgabe nicht gefunden.');
+  if (i.status === 'done') return err('Erledigte Aufgaben bleiben erhalten, sie stehen in der Punktehistorie.');
+  const c = catById(i.catId);
+  S.inst = S.inst.filter(x => x.id !== instId);
+  if (c) c.snooze = today();
+  return ok('Aufgabe gelöscht' + (c && c.interval ? '. Das Intervall startet heute neu.' : '.'));
 }
 export function escalations() {
   return S.inst.filter(i => i.status !== 'done' && diffDays(i.due, today()) < 0)

@@ -191,6 +191,7 @@ function taskCard(i) {
     }
     if (i.mode === 'booked' && me === i.assignee && !late) a += '<button class="btn small" data-act="release" data-id="' + esc(i.id) + '">Zurück in Pool</button>';
   }
+  if (isParent() && i.status !== 'done') a += '<button class="btn small danger" data-act="instDelete" data-id="' + esc(i.id) + '">Löschen</button>';
   return '<article class="card' + (late ? ' late' : '') + '"><div class="top"><h3>' + esc(c.name) + '</h3>' + pts + '</div>' +
     '<div class="meta"><span class="chip">' + esc(c.cat) + '</span>' + (c.room ? '<span>' + esc(c.room) + '</span>' : '') + '<span>' + c.min + ' Min.</span><span>' + L.freqLabel(c.interval) + '</span></div>' +
     '<div class="state">' + state + '</div>' + (a ? '<div class="actions">' + a + '</div>' : '') + '</article>';
@@ -263,6 +264,7 @@ function viewEscalation() {
     let a = '';
     if (i.status === 'open') a += '<button class="btn primary small" data-act="book" data-id="' + esc(i.id) + '">Jetzt buchen</button>' + (isParent() ? '<button class="btn small" data-act="assignPick" data-id="' + esc(i.id) + '">Zuweisen an …</button>' : '');
     else if (me === i.assignee || isParent()) a += '<button class="btn primary small" data-act="complete" data-id="' + esc(i.id) + '">Erledigt</button><button class="btn small" data-act="transferPick" data-id="' + esc(i.id) + '">Übertragen</button>';
+    if (isParent()) a += '<button class="btn small danger" data-act="instDelete" data-id="' + esc(i.id) + '">Löschen</button>';
     return '<article class="card late"><div class="who">' + (w ? avatar(w) : '') + '<span class="esc-who">' + esc(w ? w.name : 'Niemand zuständig') + '</span></div><h3>' + esc(c.name) + '</h3><div class="state"><span class="late">' + d + (d === 1 ? ' Tag' : ' Tage') + ' überfällig</span> · fällig war ' + L.fmtDate(i.due) + ' · ' + (i.status === 'open' ? 'nicht gebucht' : (i.mode === 'booked' ? 'selbst gebucht' : 'zugewiesen')) + '</div>' + (a ? '<div class="actions">' + a + '</div>' : '') + '</article>';
   }).join('') : '<div class="empty">Nichts überfällig.</div>';
   return h + '</section>';
@@ -330,6 +332,10 @@ document.addEventListener('click', async e => {
   if (a === 'book') act('book', { id });
   else if (a === 'complete') act('complete', { id });
   else if (a === 'release') act('release', { id });
+  else if (a === 'instDelete') {
+    const i = L.instById(id), c = L.catById(i.catId), w = i.assignee ? L.memberById(i.assignee) : null;
+    modal('Aufgabe löschen', '<p>„' + esc(c.name) + '“' + (w ? ' bei ' + esc(w.name) : ' im Pool') + ' endgültig entfernen? Es werden keine Punkte vergeben. Das Intervall der Tätigkeit startet heute neu.</p>', 'Löschen', () => act('deleteInst', { id }), true);
+  }
   else if (a === 'assignPick') modal('Zuweisen an', '<div class="field"><label for="p_m">Person</label><select id="p_m" name="to">' + memberOptions(null) + '</select></div><p class="hint">Zugewiesene Aufgaben lassen sich nicht löschen, nur übertragen.</p>', 'Zuweisen', fd => act('assign', { id, to: fd.to }));
   else if (a === 'transferPick') {
     const i = L.instById(id);

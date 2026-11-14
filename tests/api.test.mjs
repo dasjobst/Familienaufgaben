@@ -195,3 +195,34 @@ test('Datum: Berliner Zeit, nicht UTC', () => {
   assert.equal(L.addDays('2026-12-30', 3), '2027-01-02');
   assert.equal(L.diffDays('2026-11-14', '2026-11-10'), 4);
 });
+
+test('Eltern löschen nicht erledigte Aufgaben, Kinder nicht, Erledigtes bleibt', async () => {
+  const { call, owner } = await setupFamily();
+  const nik = await addMember(call, owner, 'Nikolas', 'child', '');
+  const kid = (await login(call, owner, nik)).token;
+  const st = (await call('GET', '/state', { token: kid })).json.state;
+  const open = st.inst.filter(i => i.status === 'open');
+  const t1 = open[0], t2 = open[1];
+  await call('POST', '/action', { token: kid, body: { type: 'book', id: t1.id } });
+  // Kind darf nicht löschen
+  assert.equal((await call('POST', '/action', { token: kid, body: { type: 'deleteInst', id: t1.id } })).json.ok, false);
+  // Eltern dürfen eine gebuchte Aufgabe löschen
+  const del = await call('POST', '/action', { token: owner, body: { type: 'deleteInst', id: t1.id } });
+  assert.equal(del.json.ok, true);
+  assert.ok(!del.json.state.inst.some(i => i.id === t1.id));
+  // Kein sofortiges Wiederauftauchen derselben Tätigkeit im Pool
+  assert.ok(!del.json.state.inst.some(i => i.catId === t1.catId && i.status !== 'done'), 'Intervall startet neu');
+  // Erledigtes lässt sich nicht löschen
+  await call('POST', '/action', { token: kid, body: { type: 'book', id: t2.id } });
+  await call('POST', '/action', { token: kid, body: { type: 'complete', id: t2.id } });
+  assert.equal((await call('POST', '/action', { token: owner, body: { type: 'deleteInst', id: t2.id } })).json.ok, false);
+  // Pool-Aufgabe ohne Bearbeiter lässt sich ebenfalls löschen
+  const pool = (await call('GET', '/state', { token: owner })).json.state.inst.find(i => i.status === 'open');
+  assert.equal((await call('POST', '/action', { token: owner, body: { type: 'deleteInst', id: pool.id } })).json.ok, true);
+  // Nach Ablauf des Intervalls kommt die Aufgabe wieder
+  const c = st.catalog.find(x => x.id === t1.catId);
+  L.setNow(L.addDays('2026-11-14', c.interval));
+  const later = (await call('GET', '/state', { token: owner })).json.state;
+  L.setNow('2026-11-14');
+  assert.ok(later.inst.some(i => i.catId === t1.catId && i.status === 'open'), 'nach dem Intervall wieder im Pool');
+});

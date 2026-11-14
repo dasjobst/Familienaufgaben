@@ -93,8 +93,9 @@ export async function handle(req, { store, env }) {
 
     // ---- Einrichtung der Familie (einmalig, mit Einrichtungscode) ----
     if (method === 'POST' && path === '/setup') {
-      const code = env.SETUP_CODE;
-      if (!code || code.length < 12) return json({ ok: false, msg: 'Die Einrichtung ist nicht aktiviert.' }, 503);
+      const code = String(env.SETUP_CODE || '').trim();
+      if (!code) return json({ ok: false, msg: 'Die Einrichtung ist nicht aktiviert: Die Funktion sieht keine Variable SETUP_CODE. In Netlify prüfen, dass sie den Bereich "Functions" (und "Runtime") hat, und danach neu deployen.' }, 503);
+      if (code.length < 12) return json({ ok: false, msg: 'Die Einrichtung ist nicht aktiviert: SETUP_CODE ist kürzer als 12 Zeichen.' }, 503);
       const b = await readJson(req);
       if (!safeEqual(String(b.code || ''), code)) return json({ ok: false, msg: 'Der Einrichtungscode stimmt nicht.' }, 403);
       const name = String(b.name || '').trim();

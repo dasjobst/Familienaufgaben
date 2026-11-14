@@ -88,6 +88,7 @@ const ACTIONS = {
   removeCat: (p, by) => L.removeCat(p.id, by),
   restoreCat: (p, by) => L.restoreCat(p.id, by),
   saveMember: (p, by) => L.saveMember(p.data, by),
+  removeMember: (p, by) => L.removeMember(p.id, by),
   setBonus: (p, by) => L.setBonus(p.value, by)
 };
 
@@ -159,6 +160,17 @@ export async function handle(req, { store, env }) {
         const out = fn(b, me);
         return { write: out.ok || pool > 0, out };
       });
+      if (b.type === 'removeMember' && res.out.out.ok) {
+        const gone = String(b.id || '');
+        await store.delete('photo/' + gone).catch(() => {});
+        for (const prefix of ['ses/', 'inv/']) {
+          const list = await store.list({ prefix });
+          for (const e of list.blobs) {
+            const v = await store.get(e.key, { type: 'json' });
+            if (v && v.m === gone) await store.delete(e.key);
+          }
+        }
+      }
       return json({ ...res.out.out, ...viewOf(res.S, me), msg: res.out.out.msg, ok: res.out.out.ok });
     }
 

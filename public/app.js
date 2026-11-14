@@ -348,7 +348,7 @@ function viewFamily() {
     let a = '';
     if (canPhoto) a += '<button class="btn small" data-act="photo" data-id="' + esc(m.id) + '">' + (m.photoV ? 'Foto ändern' : 'Foto hinzufügen') + '</button>';
     if (canPhoto && m.photoV) a += '<button class="btn small" data-act="photoDel" data-id="' + esc(m.id) + '">Foto entfernen</button>';
-    if (parent) a += '<button class="btn small" data-act="memEdit" data-id="' + esc(m.id) + '">Bearbeiten</button><button class="btn small" data-act="invite" data-id="' + esc(m.id) + '">Einladungslink</button><button class="btn small" data-act="revoke" data-id="' + esc(m.id) + '">Geräte abmelden</button>';
+    if (parent) a += '<button class="btn small" data-act="memEdit" data-id="' + esc(m.id) + '">Bearbeiten</button><button class="btn small" data-act="invite" data-id="' + esc(m.id) + '">Einladungslink</button><button class="btn small" data-act="revoke" data-id="' + esc(m.id) + '">Geräte abmelden</button>' + (mine ? '' : '<button class="btn small danger" data-act="memDelete" data-id="' + esc(m.id) + '">Löschen</button>');
     return '<article class="card"><div class="top"><div class="who">' + avatar(m, 'lg') + '<div><h3>' + esc(m.name) + (mine ? ' (du)' : '') + '</h3><div class="meta">' + (m.email ? '<span>' + esc(m.email) + '</span>' : (parent || mine ? '<span>Keine E-Mail hinterlegt</span>' : '')) + '</div></div></div><span class="chip">' + (m.role === 'parent' ? 'Eltern' : 'Kind') + '</span></div>' + (a ? '<div class="actions">' + a + '</div>' : '') + '</article>';
   }).join('');
   if (parent) h += '<div class="actions"><button class="btn primary small" data-act="memNew">+ Mitglied</button></div>';
@@ -444,6 +444,7 @@ document.addEventListener('click', async e => {
   else if (a === 'catDelete') { const c = L.catById(id); modal('Tätigkeit löschen', '<p>„' + esc(c.name) + '“ aus dem Katalog entfernen? Hat die Tätigkeit schon erledigte Aufgaben, wird sie archiviert und die Punktehistorie bleibt.</p>', 'Löschen', () => act('removeCat', { id }), true); }
   else if (a === 'memNew') modal('Neues Mitglied', memForm(), 'Hinzufügen', fd => act('saveMember', { data: fd }));
   else if (a === 'memEdit') { const m = L.memberById(id); modal('Mitglied bearbeiten', memForm(m) + '<input type="hidden" name="id" value="' + esc(m.id) + '">', 'Speichern', fd => act('saveMember', { data: fd })); }
+  else if (a === 'memDelete') { const m = L.memberById(id); modal('Mitglied löschen', '<p>' + esc(m.name) + ' endgültig entfernen? Konto, Punkte, Verlauf, Foto und alle angemeldeten Geräte werden gelöscht. Offene gebuchte oder zugewiesene Aufgaben gehen ohne Strafpunkte zurück in den Pool. Das lässt sich nicht rückgängig machen.</p>', 'Endgültig löschen', () => act('removeMember', { id }), true); }
   else if (a === 'bonusSave') act('setBonus', { value: $('bonus').value });
   else if (a === 'penaltySave') act('setPenalty', { value: $('penalty').value });
   else if (a === 'photo') { photoTarget = id; $('photoInput').click(); }

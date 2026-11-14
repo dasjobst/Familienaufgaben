@@ -360,6 +360,30 @@ export function saveMember(data, by) {
   if (S.members.length >= 20) return err('Mehr als 20 Mitglieder sind nicht vorgesehen.');
   S.members.push({ id: uid('m'), name, role, email }); return ok('Mitglied hinzugefügt.');
 }
+export function removeMember(id, by) {
+  if (!isParent(by)) return err('Nur Eltern dürfen Mitglieder löschen.');
+  const m = memberById(id); if (!m) return err('Mitglied nicht gefunden.');
+  if (id === by) return err('Du kannst dich nicht selbst löschen.');
+  if (m.role === 'parent' && S.members.filter(x => x.role === 'parent').length < 2) return err('Es muss mindestens ein Elternteil bleiben.');
+  let back = 0;
+  S.inst = S.inst.filter(i => {
+    if (i.assignee !== id) return true;
+    const c = catById(i.catId);
+    if (i.status === 'done') return false;
+    if (c && c.resp && c.resp.mode === 'each') return false;
+    i.status = 'open'; i.assignee = null; i.mode = null; i.log.push('Zurück im Pool, ' + m.name + ' wurde gelöscht'); back++;
+    return true;
+  });
+  S.ledger = S.ledger.filter(l => l.member !== id);
+  S.catalog.forEach(c => {
+    if (c.resp && c.resp.mode === 'each' && c.resp.who === 'custom') {
+      c.resp.ids = (c.resp.ids || []).filter(x => x !== id);
+      if (!c.resp.ids.length) c.resp = { mode: 'pool' };
+    }
+  });
+  S.members = S.members.filter(x => x.id !== id);
+  return ok(m.name + ' wurde gelöscht.' + (back ? ' ' + back + ' Aufgabe(n) liegen wieder im Pool.' : ''));
+}
 export function setPhotoMeta(memberId, by, on, stamp) {
   const m = memberById(memberId); if (!m) return err('Mitglied nicht gefunden.');
   if (!(by === memberId || isParent(by))) return err('Nur die Person selbst oder Eltern dürfen das Foto ändern.');

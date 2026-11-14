@@ -395,3 +395,26 @@ test('Sammelzuweisung unverteilter überfälliger Aufgaben', async () => {
   assert.equal(r.json.ok, true);
   assert.ok(unclaimed.every(u => r.json.state.inst.find(i => i.id === u.id)?.assignee === nik));
 });
+
+test('Mitglied löschen: Aufgaben zurück in den Pool, Konto, Sitzungen und Foto weg', async () => {
+  const store = memoryStore(), env = { SETUP_CODE: 'delete-setup-code-1234' };
+  const api = async (method, path, token, body) => {
+    const h = { 'content-type': 'application/json' }; if (token) h.authorization = 'Bearer ' + token;
+    return (await handle(new Request('https://x/api' + path, { method, headers: h, body: body ? JSON.stringify(body) : undefined }), { store, env })).json();
+  };
+  const owner = (await api('POST', '/setup', null, { code: env.SETUP_CODE, name: 'Eltern' })).token;
+  const add = await api('POST', '/action', owner, { type: 'saveMember', data: { name: 'Kind', role: 'child' } });
+  const kid = add.state.members.find(m => m.name === 'Kind').id;
+  const kt = (await api('POST', '/redeem', null, { token: (await api('POST', '/invite', owner, { memberId: kid })).url.split('#invite=')[1] })).token;
+  const st = await api('GET', '/state', kt);
+  const pool = st.state.inst.find(i => i.status === 'open');
+  await api('POST', '/action', kt, { type: 'book', id: pool.id });
+  assert.equal((await api('POST', '/action', kt, { type: 'removeMember', id: kid })).ok, false, 'Kind darf nicht löschen');
+  assert.equal((await api('POST', '/action', owner, { type: 'removeMember', id: (await api('GET', '/state', owner)).me })).ok, false, 'nicht selbst');
+  const r = await api('POST', '/action', owner, { type: 'removeMember', id: kid });
+  assert.equal(r.ok, true);
+  assert.ok(!r.state.members.some(m => m.id === kid));
+  assert.ok(!r.state.inst.some(i => i.assignee === kid));
+  assert.equal(r.state.inst.find(i => i.id === pool.id).status, 'open');
+  assert.equal((await api('GET', '/state', kt)).ok, false, 'Sitzung des gelöschten Kindes ungültig');
+});

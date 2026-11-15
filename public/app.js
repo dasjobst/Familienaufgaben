@@ -254,7 +254,7 @@ function viewTasks() {
   const reviews = p ? S.inst.filter(i => i.status === 'review' && i.assignee !== me).sort(byDue) : [];
   const done = S.inst.filter(i => i.status === 'done' && !i.seed).sort((a, b) => a.doneAt < b.doneAt ? 1 : -1).slice(0, 8);
   let h = '';
-  if (p && S.members.length === 1) {
+  if (L.isAdmin(me) && S.members.length === 1) {
     h += '<section><article class="card guide"><h3>So startest du</h3><ol><li>Unter „Familie“ Mitglieder anlegen, Rolle und E-Mail eintragen.</li><li>Pro Mitglied einen Einladungslink erzeugen und verschicken.</li><li>Im Katalog Tätigkeiten prüfen und eigene ergänzen.</li></ol><div class="actions"><button class="btn primary small" data-tab="family">Mitglieder anlegen</button></div></article></section>';
   }
   if (reviews.length) h += '<section><div class="sec-h"><h2>Wartet auf Check</h2><span class="count">' + reviews.length + '</span></div>' + reviews.map(taskCard).join('') + '</section>';
@@ -358,17 +358,18 @@ function viewEscalation() {
 }
 
 function viewFamily() {
-  const parent = isParent();
+  const parent = isParent(), admin = L.isAdmin(me);
   let h = '<section><div class="sec-h"><h2>Mitglieder</h2></div>';
   h += S.members.map(m => {
-    const mine = m.id === me, canPhoto = mine || parent;
+    const mine = m.id === me, canPhoto = mine || admin;
     let a = '';
     if (canPhoto) a += '<button class="btn small" data-act="photo" data-id="' + esc(m.id) + '">' + (m.photoV ? 'Foto ändern' : 'Foto hinzufügen') + '</button>';
     if (canPhoto && m.photoV) a += '<button class="btn small" data-act="photoDel" data-id="' + esc(m.id) + '">Foto entfernen</button>';
-    if (parent) a += '<button class="btn small" data-act="memEdit" data-id="' + esc(m.id) + '">Bearbeiten</button><button class="btn small" data-act="invite" data-id="' + esc(m.id) + '">Einladungslink</button><button class="btn small" data-act="revoke" data-id="' + esc(m.id) + '">Geräte abmelden</button>' + (m.pw ? '<button class="btn small" data-act="pwReset" data-id="' + esc(m.id) + '">Passwort zurücksetzen</button>' : '') + (mine ? '' : '<button class="btn small danger" data-act="memDelete" data-id="' + esc(m.id) + '">Löschen</button>');
-    return '<article class="card"><div class="top"><div class="who">' + avatar(m, 'lg') + '<div><h3>' + esc(m.name) + (mine ? ' (du)' : '') + '</h3><div class="meta">' + (m.email ? '<span>' + esc(m.email) + '</span>' : (parent || mine ? '<span>Keine E-Mail hinterlegt</span>' : '')) + '</div></div></div><span class="chip">' + (m.role === 'parent' ? 'Eltern' : 'Kind') + '</span></div>' + (a ? '<div class="actions">' + a + '</div>' : '') + '</article>';
+    if (admin) a += '<button class="btn small" data-act="memEdit" data-id="' + esc(m.id) + '">Bearbeiten</button><button class="btn small" data-act="invite" data-id="' + esc(m.id) + '">Einladungslink</button><button class="btn small" data-act="revoke" data-id="' + esc(m.id) + '">Geräte abmelden</button>' + (m.pw ? '<button class="btn small" data-act="pwReset" data-id="' + esc(m.id) + '">Passwort zurücksetzen</button>' : '') + (mine ? '' : '<button class="btn small danger" data-act="memDelete" data-id="' + esc(m.id) + '">Löschen</button>');
+    return '<article class="card"><div class="top"><div class="who">' + avatar(m, 'lg') + '<div><h3>' + esc(m.name) + (mine ? ' (du)' : '') + '</h3><div class="meta">' + (m.email ? '<span>' + esc(m.email) + '</span>' : (admin || mine ? '<span>Keine E-Mail hinterlegt</span>' : '')) + '</div></div></div><span class="chip">' + L.roleLabel(m.role) + '</span></div>' + (a ? '<div class="actions">' + a + '</div>' : '') + '</article>';
   }).join('');
-  if (parent) h += '<div class="actions"><button class="btn primary small" data-act="memNew">+ Mitglied</button></div>';
+  if (admin) h += '<div class="actions"><button class="btn primary small" data-act="memNew">+ Mitglied</button></div>';
+  else h += '<p class="note">Mitglieder, Rollen, E-Mail-Adressen, Einladungen und Passwort-Resets verwaltet nur der Admin.</p>';
   h += '</section>';
   const pen = S.penalty === undefined ? 0.5 : S.penalty;
   h += '<section><div class="sec-h"><h2>Regeln</h2></div><div class="card">' +
@@ -422,7 +423,7 @@ function memForm(m) {
   m = m || { name: '', role: 'child', email: '' };
   return '<div class="field"><label for="m_n">Name</label><input id="m_n" name="name" required maxlength="40" value="' + esc(m.name) + '"></div>' +
     '<div class="field"><label for="m_e">E-Mail (optional)</label><input id="m_e" name="email" type="email" inputmode="email" autocomplete="off" value="' + esc(m.email || '') + '" placeholder="name@beispiel.de"></div>' +
-    '<div class="field"><label for="m_r">Rolle</label><select id="m_r" name="role"><option value="child"' + (m.role === 'child' ? ' selected' : '') + '>Kind</option><option value="parent"' + (m.role === 'parent' ? ' selected' : '') + '>Eltern</option></select></div>';
+    '<div class="field"><label for="m_r">Rolle</label><select id="m_r" name="role"><option value="child"' + (m.role === 'child' ? ' selected' : '') + '>Kind</option><option value="parent"' + (m.role === 'parent' ? ' selected' : '') + '>Eltern</option><option value="admin"' + (m.role === 'admin' ? ' selected' : '') + '>Admin (Eltern + Nutzerverwaltung)</option></select></div>';
 }
 
 async function copyText(text, ta) {

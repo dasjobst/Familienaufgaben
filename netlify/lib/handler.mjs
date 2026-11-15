@@ -68,7 +68,7 @@ async function sessionMember(store, req) {
 
 function viewOf(S, me) {
   const v = structuredClone(S);
-  const meIsParent = L.isParent(me);
+  const meIsParent = L.isAdmin(me);
   v.members.forEach(m => { if (!meIsParent && m.id !== me) delete m.email; });
   return { ok: true, initialized: true, me, date: L.today(), state: v };
 }
@@ -244,7 +244,7 @@ export async function handle(req, { store, env }) {
     if (method === 'POST' && path === '/invite') {
       const b = await readJson(req);
       L.setState(cur.data);
-      if (!L.isParent(me)) return json({ ok: false, msg: 'Nur Eltern dürfen einladen.' }, 403);
+      if (!L.isAdmin(me)) return json({ ok: false, msg: 'Einladungen erzeugt nur der Admin.' }, 403);
       const mem = L.memberById(String(b.memberId || ''));
       if (!mem) return json({ ok: false, msg: 'Mitglied nicht gefunden.' }, 404);
       const token = newToken();
@@ -255,7 +255,7 @@ export async function handle(req, { store, env }) {
 
     if (method === 'POST' && path === '/resetpw') {
       const b = await readJson(req);
-      if (!L.isParent(me)) return json({ ok: false, msg: 'Nur Eltern dürfen Passwörter zurücksetzen.' }, 403);
+      if (!L.isAdmin(me)) return json({ ok: false, msg: 'Passwörter setzt nur der Admin zurück.' }, 403);
       const target = String(b.memberId || '');
       if (!cur.data.members.some(m => m.id === target)) return json({ ok: false, msg: 'Mitglied nicht gefunden.' }, 404);
       await store.delete('pw/' + target);
@@ -272,7 +272,7 @@ export async function handle(req, { store, env }) {
     if (method === 'POST' && path === '/revoke') {
       const b = await readJson(req);
       L.setState(cur.data);
-      if (!L.isParent(me)) return json({ ok: false, msg: 'Nur Eltern dürfen Geräte abmelden.' }, 403);
+      if (!L.isAdmin(me)) return json({ ok: false, msg: 'Geräte meldet nur der Admin ab.' }, 403);
       const target = String(b.memberId || '');
       if (!L.memberById(target)) return json({ ok: false, msg: 'Mitglied nicht gefunden.' }, 404);
       let n = 0;
@@ -296,7 +296,7 @@ export async function handle(req, { store, env }) {
         if (!e) return new Response(null, { status: 404 });
         return new Response(e.data, { status: 200, headers: { 'content-type': (e.metadata && e.metadata.type) || 'image/jpeg', 'cache-control': 'private, max-age=86400', 'x-content-type-options': 'nosniff' } });
       }
-      if (!(id === me || L.isParent(me))) return json({ ok: false, msg: 'Nur die Person selbst oder Eltern dürfen das Foto ändern.' }, 403);
+      if (!(id === me || L.isAdmin(me))) return json({ ok: false, msg: 'Nur die Person selbst oder der Admin dürfen das Foto ändern.' }, 403);
       if (method === 'PUT') {
         const buf = await req.arrayBuffer();
         if (buf.byteLength > MAX_PHOTO) return json({ ok: false, msg: 'Das Foto ist zu groß (höchstens 350 KB).' }, 413);

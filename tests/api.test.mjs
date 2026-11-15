@@ -479,3 +479,40 @@ test('Anmeldung mit E-Mail und Passwort: setzen, einloggen, Sperre, Änderung, R
   assert.equal((await api('POST', '/login', null, { email: 'kind@example.de', password: 'Gummibaerchen-am-Morgen' }))._status, 401);
   assert.equal((await api('GET', '/state', kt)).ok, false);
 });
+
+test('Adminrolle: Nutzerverwaltung nur zentral beim Admin, Eltern behalten Aufgabenrechte', async () => {
+  const store = memoryStore(), env = { SETUP_CODE: 'admin-setup-code-12345' };
+  const api = async (method, path, token, body) => {
+    const h = { 'content-type': 'application/json' }; if (token) h.authorization = 'Bearer ' + token;
+    const res = await handle(new Request('https://x/api' + path, { method, headers: h, body: body ? JSON.stringify(body) : undefined }), { store, env });
+    const d = await res.json(); d._status = res.status; return d;
+  };
+  const adm = (await api('POST', '/setup', null, { code: env.SETUP_CODE, name: 'Admin', email: 'a@example.de' })).token;
+  assert.equal((await api('GET', '/state', adm)).state.members[0].role, 'admin');
+  const add = async (name, role, email) => (await api('POST', '/action', adm, { type: 'saveMember', data: { name, role, email } })).state.members.find(m => m.name === name).id;
+  const pid = await add('Eltern2', 'parent', 'p@example.de'), kid = await add('Kind', 'child', 'k@example.de');
+  const login = async id => (await api('POST', '/redeem', null, { token: (await api('POST', '/invite', adm, { memberId: id })).url.split('#invite=')[1] })).token;
+  const par = await login(pid), kt = await login(kid);
+  // Eltern: keine Nutzerverwaltung
+  assert.equal((await api('POST', '/action', par, { type: 'saveMember', data: { name: 'Neu', role: 'child' } })).ok, false);
+  assert.equal((await api('POST', '/action', par, { type: 'saveMember', data: { id: kid, name: 'Kind', role: 'parent' } })).ok, false);
+  assert.equal((await api('POST', '/action', par, { type: 'removeMember', id: kid })).ok, false);
+  assert.equal((await api('POST', '/invite', par, { memberId: kid }))._status, 403);
+  assert.equal((await api('POST', '/revoke', par, { memberId: kid }))._status, 403);
+  assert.equal((await api('POST', '/resetpw', par, { memberId: kid }))._status, 403);
+  assert.equal((await api('PUT', '/photo/' + kid, par, null))._status, 403);
+  // Eltern sehen fremde E-Mails nicht, behalten aber Aufgabenrechte
+  const pv = (await api('GET', '/state', par)).state.members;
+  assert.ok(pv.filter(m => m.id !== pid).every(m => !m.email));
+  assert.equal((await api('POST', '/action', par, { type: 'saveCat', data: { name: 'Eltern-Aufgabe', min: 10, interval: 7 } })).ok, true);
+  // Admin darf alles, aber der letzte Admin bleibt
+  assert.equal((await api('POST', '/action', adm, { type: 'saveMember', data: { id: kid, name: 'Kind', role: 'child', email: 'k@example.de' } })).ok, true);
+  const self = (await api('GET', '/state', adm)).me;
+  assert.equal((await api('POST', '/action', adm, { type: 'saveMember', data: { id: self, name: 'Admin', role: 'parent', email: 'a@example.de' } })).ok, false, 'letzter Admin');
+  assert.equal((await api('POST', '/action', adm, { type: 'saveMember', data: { id: pid, name: 'Eltern2', role: 'admin', email: 'p@example.de' } })).ok, true);
+  assert.equal((await api('POST', '/action', adm, { type: 'saveMember', data: { id: self, name: 'Admin', role: 'parent', email: 'a@example.de' } })).ok, true, 'jetzt ist Eltern2 Admin');
+  // Bestand ohne Admin wird migriert
+  const legacy = JSON.parse(JSON.stringify((await api('GET', '/state', par)).state)); legacy.members.forEach(m => { if (m.role === 'admin') m.role = 'parent'; });
+  L.setState(legacy); assert.equal(legacy.members.filter(m => m.role === 'admin').length, 1);
+  assert.equal(L.isParent(kid), false);
+});

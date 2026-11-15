@@ -9,7 +9,12 @@ const berlin = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin', yea
 export function setNow(d) { NOW = d || null; }
 export function today() { return NOW || berlin.format(new Date()); }
 export function ptsFromMin(min) { return Math.max(1, Math.round((Number(min) || 0) / 5)); }
-export function setState(s) { S = s; if (S && S.catalog) S.catalog.forEach(c => { c.pts = ptsFromMin(c.min); }); }
+export function setState(s) {
+  S = s;
+  if (S && S.catalog) S.catalog.forEach(c => { c.pts = ptsFromMin(c.min); });
+  // Bestand ohne Admin: der erste Eltern-Account (Einrichter) wird Admin.
+  if (S && S.members && S.members.length && !S.members.some(m => m.role === 'admin')) { const f = S.members.find(m => m.role === 'parent'); if (f) f.role = 'admin'; }
+}
 export function getState() { return S; }
 
 export function addDays(s, n) { const p = s.split('-').map(Number); return new Date(Date.UTC(p[0], p[1] - 1, p[2] + n)).toISOString().slice(0, 10); }
@@ -70,7 +75,9 @@ function uid(p) { S.seq++; return p + S.seq; }
 export function catById(id) { return S.catalog.find(c => c.id === id); }
 export function memberById(id) { return S.members.find(m => m.id === id); }
 export function instById(id) { return S.inst.find(i => i.id === id); }
-export function isParent(id) { const m = memberById(id); return !!m && m.role === 'parent'; }
+export function isParent(id) { const m = memberById(id); return !!m && (m.role === 'parent' || m.role === 'admin'); }
+export function isAdmin(id) { const m = memberById(id); return !!m && m.role === 'admin'; }
+export function roleLabel(r) { return r === 'admin' ? 'Admin' : r === 'parent' ? 'Eltern' : 'Kind'; }
 export function activeInst(catId) { return S.inst.find(i => i.catId === catId && i.status !== 'done'); }
 export function lastDone(catId) { let l = null; S.inst.forEach(i => { if (i.catId === catId && i.status === 'done' && (!l || i.doneAt > l)) l = i.doneAt; }); return l; }
 export function pointsOf(memberId) { return S.ledger.filter(l => l.member === memberId).reduce((a, l) => a + l.delta, 0); }
@@ -82,7 +89,7 @@ function str(v, max) { return String(v == null ? '' : v).trim().slice(0, max); }
 // Neue Familie: ein Elternteil, Standardkatalog mit gestaffelter Vorgeschichte.
 export function createState(ownerName, ownerEmail) {
   S = { v: 2, seq: 0, bonus: 1.5, penalty: 0.5, members: [], catalog: [], inst: [], ledger: [] };
-  const owner = { id: uid('m'), name: str(ownerName, 40), role: 'parent', email: str(ownerEmail, 120).toLowerCase() };
+  const owner = { id: uid('m'), name: str(ownerName, 40), role: 'admin', email: str(ownerEmail, 120).toLowerCase() };
   S.members.push(owner);
   SEED_CATALOG.forEach((r, i) => {
     const c = { id: uid('c'), name: r[0], cat: r[1], room: r[2], interval: r[3], min: r[4], pts: Math.max(1, Math.round(r[4] / 5)), origin: 'standard', archived: false };
@@ -108,7 +115,7 @@ function lastDoneInst(catId, memberId) {
 // Wer ist für eine Tätigkeit je einzeln zuständig? Leer = Pool.
 export function targetsOf(c) {
   const r = c.resp; if (!r || r.mode !== 'each') return [];
-  return S.members.filter(m => r.who === 'all' || (r.who === 'children' && m.role === 'child') || (r.who === 'parents' && m.role === 'parent') || (r.who === 'custom' && (r.ids || []).includes(m.id)));
+  return S.members.filter(m => r.who === 'all' || (r.who === 'children' && m.role === 'child') || (r.who === 'parents' && m.role !== 'child') || (r.who === 'custom' && (r.ids || []).includes(m.id)));
 }
 export function respLabel(c) {
   const r = c.resp; if (!r || r.mode !== 'each') return 'Pool';
@@ -345,27 +352,26 @@ export function restoreCat(id, by) {
 }
 export function isEmail(s) { return typeof s === 'string' && s.length <= 120 && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(s); }
 export function saveMember(data, by) {
-  if (!isParent(by)) return err('Nur Eltern dürfen Mitglieder ändern.');
+  if (!isAdmin(by)) return err('Mitglieder und ihre Einstellungen ändert nur der Admin.');
   data = data || {};
   const name = str(data.name, 40); if (!name) return err('Bitte einen Namen eingeben.');
   if (S.members.some(m => m.name.toLowerCase() === name.toLowerCase() && m.id !== data.id)) return err('Der Name ist schon vergeben.');
   const email = str(data.email, 120).toLowerCase();
   if (email && !isEmail(email)) return err('Diese E-Mail-Adresse ist ungültig.');
   if (email && S.members.some(m => (m.email || '') === email && m.id !== data.id)) return err('Diese E-Mail-Adresse gehört schon zu einem anderen Mitglied.');
-  const role = data.role === 'parent' ? 'parent' : 'child';
+  const role = data.role === 'admin' ? 'admin' : data.role === 'parent' ? 'parent' : 'child';
   if (data.id) {
     const m = memberById(data.id); if (!m) return err('Mitglied nicht gefunden.');
-    if (m.role === 'parent' && role === 'child' && S.members.filter(x => x.role === 'parent').length < 2) return err('Es muss mindestens ein Elternteil bleiben.');
+    if (m.role === 'admin' && role !== 'admin' && S.members.filter(x => x.role === 'admin').length < 2) return err('Es muss mindestens ein Admin bleiben. Ernenne zuerst jemand anderen zum Admin.');
     m.name = name; m.role = role; m.email = email; return ok('Gespeichert.');
   }
   if (S.members.length >= 20) return err('Mehr als 20 Mitglieder sind nicht vorgesehen.');
   S.members.push({ id: uid('m'), name, role, email }); return ok('Mitglied hinzugefügt.');
 }
 export function removeMember(id, by) {
-  if (!isParent(by)) return err('Nur Eltern dürfen Mitglieder löschen.');
+  if (!isAdmin(by)) return err('Mitglieder löscht nur der Admin.');
   const m = memberById(id); if (!m) return err('Mitglied nicht gefunden.');
   if (id === by) return err('Du kannst dich nicht selbst löschen.');
-  if (m.role === 'parent' && S.members.filter(x => x.role === 'parent').length < 2) return err('Es muss mindestens ein Elternteil bleiben.');
   let back = 0;
   S.inst = S.inst.filter(i => {
     if (i.assignee !== id) return true;
@@ -416,7 +422,7 @@ export function removeEntry(id, by) {
 }
 export function setPhotoMeta(memberId, by, on, stamp) {
   const m = memberById(memberId); if (!m) return err('Mitglied nicht gefunden.');
-  if (!(by === memberId || isParent(by))) return err('Nur die Person selbst oder Eltern dürfen das Foto ändern.');
+  if (!(by === memberId || isAdmin(by))) return err('Nur die Person selbst oder der Admin dürfen das Foto ändern.');
   if (on) m.photoV = stamp || Date.now(); else delete m.photoV;
   return ok(on ? 'Foto gespeichert.' : 'Foto entfernt.');
 }

@@ -261,7 +261,7 @@ function viewTasks() {
   h += '<section><div class="sec-h"><h2>Meine Aufgaben</h2><span class="count">' + mine.length + '</span></div>' + (mine.length ? mine.map(taskCard).join('') : '<div class="empty">Nichts offen. Buche eine Aufgabe aus dem Pool und sammle mehr Punkte als bei einer Zuweisung.</div>') + '</section>';
   const shown = ui.poolAll ? open : open.slice(0, 5);
   h += '<section><div class="sec-h"><h2>Pool</h2><span class="count">' + open.length + '</span></div>';
-  if (p) h += '<div class="actions"><button class="btn small" data-act="assignNew">+ Aufgabe zuweisen</button></div>';
+  if (p) h += '<div class="actions"><button class="btn small" data-act="assignNew">+ Aufgabe zuweisen</button><button class="btn small" data-act="oneoffNew">+ Ad-hoc-Aufgabe</button></div>';
   h += (shown.length ? shown.map(taskCard).join('') : '<div class="empty">Der Pool ist leer. Neue Aufgaben entstehen, sobald Intervalle ablaufen.</div>');
   if (open.length > 5) h += '<button class="btn more-btn" data-act="togglePool">' + (ui.poolAll ? 'Weniger anzeigen' : 'Alle ' + open.length + ' anzeigen') + '</button>';
   h += '</section>';
@@ -272,8 +272,8 @@ function viewTasks() {
 
 function viewCatalog() {
   const parent = isParent();
-  const cats = [...new Set(S.catalog.map(c => c.cat))].sort();
-  const list = S.catalog.filter(c => (filt.archive || !c.archived) && (!filt.cat || c.cat === filt.cat) && (!filt.q || c.name.toLowerCase().includes(filt.q.toLowerCase())));
+  const cats = [...new Set(S.catalog.filter(c => !c.oneoff).map(c => c.cat))].sort();
+  const list = S.catalog.filter(c => !c.oneoff && (filt.archive || !c.archived) && (!filt.cat || c.cat === filt.cat) && (!filt.q || c.name.toLowerCase().includes(filt.q.toLowerCase())));
   list.sort((a, b) => { const ba = L.band(a.interval)[0], bb = L.band(b.interval)[0]; return ba - bb || a.name.localeCompare(b.name, 'de'); });
   const searching = !!(filt.q || filt.cat);
   let h = '<section><div class="sec-h"><h2>Katalog</h2><span class="count">' + list.length + ' Tätigkeiten</span></div>';
@@ -311,16 +311,15 @@ function viewCatalog() {
 function viewPoints() {
   const rows = S.members.map(m => ({ m, p: L.pointsOf(m.id), miss: L.missedStats(m.id, 30) })).sort((a, b) => b.p - a.p);
   const max = Math.max(1, ...rows.map(r => r.p));
-  let h = '<section><div class="sec-h"><h2>Board</h2></div><div class="actions"><button class="btn primary small" data-act="adhocNew">+ Ad-hoc-Aufgabe eintragen</button></div>';
+  let h = '<section><div class="sec-h"><h2>Board</h2></div>';
   const feed = L.board(25);
   h += '<div class="sec-h"><h2>Zuletzt erledigt</h2><span class="count">letzte ' + feed.length + '</span></div>';
   h += feed.length ? '<div class="card feed">' + feed.map(l => {
     const m = L.memberById(l.member);
-    const del = l.kind === 'adhoc' && (isParent() || (l.by === me && l.ts && Date.now() - l.ts < 600000));
-    return '<div class="frow">' + avatar(m, 'sm') + '<div class="t"><b>' + esc(l.text) + '</b><div class="hint">' + esc(m ? m.name : 'Gelöscht') + ' · ' + esc(L.stampText(l)) + (l.min ? ' · ' + l.min + ' Min.' : '') + (l.kind === 'adhoc' ? ' · Ad hoc' : '') + '</div></div><div class="fr"><span class="pts">+' + l.delta + '</span>' + (del ? '<button class="btn icon small" data-act="entryDel" data-id="' + esc(l.id) + '" aria-label="Eintrag entfernen">×</button>' : '') + '</div></div>';
+    return '<div class="frow">' + avatar(m, 'sm') + '<div class="t"><b>' + esc(l.text) + '</b><div class="hint">' + esc(m ? m.name : 'Gelöscht') + ' · ' + esc(L.stampText(l)) + (l.min ? ' · ' + l.min + ' Min.' : '') + + '</div></div><div class="fr"><span class="pts">+' + l.delta + '</span>' + '' + '</div></div>';
   }).join('') + '</div>' : '<div class="empty">Noch nichts erledigt.</div>';
   h += '<div class="sec-h"><h2>Punktestand</h2></div><div class="card rank">' + rows.map(r => '<div class="r"><span class="who">' + avatar(r.m) + '<span class="nm">' + esc(r.m.name) + '</span></span><span class="sc' + (r.p < 0 ? ' neg' : '') + '">' + r.p + '</span><div class="bar"><i style="width:' + Math.max(2, Math.round(Math.max(0, r.p) / max * 100)) + '%"></i></div>' + (r.miss.n ? '<span class="hint" style="grid-column:1/-1">Verpasst in 30 Tagen: ' + r.miss.n + '× (−' + r.miss.pts + ' Punkte)</span>' : '') + '</div>').join('') + '</div>';
-  h += '<p class="note">Punkte entstehen aus der Zeit: 5 Minuten = 1 Punkt. Selbst gebuchte Aufgaben zählen ×' + S.bonus + ', zugewiesene ×1, Ad-hoc-Einträge ×1. Verpasste Aufgaben kosten ×' + (S.penalty === undefined ? 0.5 : S.penalty) + ' ihres Werts.</p></section>';
+  h += '<p class="note">Punkte entstehen aus der Zeit: 5 Minuten = 1 Punkt. Selbst gebuchte Aufgaben zählen ×' + S.bonus + ', zugewiesene und Ad-hoc-Aufgaben ×1. Verpasste Aufgaben kosten ×' + (S.penalty === undefined ? 0.5 : S.penalty) + ' ihres Werts.</p></section>';
   const lg = S.ledger.filter(l => l.kind === 'missed').slice(-10).reverse();
   if (lg.length) h += '<section><div class="sec-h"><h2>Abzüge</h2></div><div class="log">' + lg.map(l => '<div><span>' + esc(L.memberById(l.member) ? L.memberById(l.member).name : '?') + ' · ' + esc(l.text) + '</span><span class="d neg">' + l.delta + '</span></div>').join('') + '</div></section>';
   return h;
@@ -404,7 +403,7 @@ function render() {
 function catForm(c) {
   c = c || { name: '', cat: '', room: '', interval: 7, min: 15, pts: '' };
   const r = c.resp && c.resp.mode === 'each' ? c.resp.who : 'pool', sel = (c.resp && c.resp.ids) || [];
-  const cats = [...new Set(S.catalog.map(x => x.cat))].sort();
+  const cats = [...new Set(S.catalog.filter(x => !x.oneoff).map(x => x.cat))].sort();
   const advOpen = r !== 'pool' || (c.weekday !== null && c.weekday !== undefined) || c.check || (c.items && c.items.length);
   return '<div class="field"><label for="f_name">Name der Tätigkeit</label><input id="f_name" name="name" required maxlength="80" value="' + esc(c.name) + '"></div>' +
     '<div class="grid2"><div class="field"><label for="f_cat">Kategorie</label><input id="f_cat" name="cat" list="catlist" maxlength="40" value="' + esc(c.cat) + '"><datalist id="catlist">' + cats.map(x => '<option value="' + esc(x) + '">').join('') + '</datalist></div>' +
@@ -483,10 +482,9 @@ document.addEventListener('click', async e => {
       if (r.data && r.data.state) apply(r.data);
       toast((r.data && r.data.msg) || 'Fehler.', !(r.data && r.data.ok)); return r.data || { ok: false };
     }, true);
-  } else if (a === 'adhocNew') {
-    const who = isParent() ? '<div class="field"><label for="h_w">Erledigt von</label><select id="h_w" name="who">' + memberOptions(me) + '</select></div>' : '';
-    modal('Ad-hoc-Aufgabe eintragen', '<div class="field"><label for="h_n">Was wurde erledigt?</label><input id="h_n" name="name" required maxlength="80" placeholder="z. B. Nachbarin beim Tragen geholfen"></div><div class="field"><label for="h_m">Dauer in Minuten</label><input id="h_m" name="min" type="number" inputmode="numeric" min="1" max="480" required value="15"><span class="hint">Punkte: 5 Minuten = 1 Punkt. Der Eintrag erscheint sofort auf dem Board.</span></div>' + who, 'Eintragen', fd => act('adhoc', fd));
-  } else if (a === 'entryDel') act('removeEntry', { id });
+  } else if (a === 'oneoffNew') {
+    modal('Ad-hoc-Aufgabe zuweisen', '<div class="field"><label for="h_n">Was ist zu tun?</label><input id="h_n" name="name" required maxlength="80" placeholder="z. B. Keller aufräumen"></div><div class="grid2"><div class="field"><label for="h_m">Zeitaufwand (Min.)</label><input id="h_m" name="min" type="number" inputmode="numeric" min="1" max="480" required value="30"></div><div class="field"><label for="h_d">Fällig am</label><input id="h_d" name="due" type="date" value="' + L.addDays(L.today(), 2) + '" min="' + L.today() + '"></div></div><div class="field"><label for="h_w">Zuweisen an</label><select id="h_w" name="to">' + memberOptions(null) + '</select></div><p class="hint">Einmalige Aufgabe, nicht im Katalog. Punkte: 5 Minuten = 1 Punkt. Zugewiesene Aufgaben lassen sich nur übertragen, nicht ablehnen.</p>', 'Zuweisen', fd => act('assignOneoff', fd));
+  }
   else if (a === 'memDelete') { const m = L.memberById(id); modal('Mitglied löschen', '<p>' + esc(m.name) + ' endgültig entfernen? Konto, Punkte, Verlauf, Foto und alle angemeldeten Geräte werden gelöscht. Offene gebuchte oder zugewiesene Aufgaben gehen ohne Strafpunkte zurück in den Pool. Das lässt sich nicht rückgängig machen.</p>', 'Endgültig löschen', () => act('removeMember', { id }), true); }
   else if (a === 'bonusSave') act('setBonus', { value: $('bonus').value });
   else if (a === 'penaltySave') act('setPenalty', { value: $('penalty').value });

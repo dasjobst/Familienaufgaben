@@ -419,26 +419,44 @@ test('Mitglied löschen: Aufgaben zurück in den Pool, Konto, Sitzungen und Foto
   assert.equal((await api('GET', '/state', kt)).ok, false, 'Sitzung des gelöschten Kindes ungültig');
 });
 
-test('Ad-hoc-Einträge und Board: Punkte aus Minuten, letzte 25, Rücknahme', async () => {
+test('Ad-hoc-Aufgaben: nur Eltern legen an und weisen zu, Punkte aus Minuten, Board zeigt die letzten 25', async () => {
   const store = memoryStore(), env = { SETUP_CODE: 'adhoc-setup-code-12345' };
   const api = async (method, path, token, body) => {
     const h = { 'content-type': 'application/json' }; if (token) h.authorization = 'Bearer ' + token;
     return (await handle(new Request('https://x/api' + path, { method, headers: h, body: body ? JSON.stringify(body) : undefined }), { store, env })).json();
   };
   const owner = (await api('POST', '/setup', null, { code: env.SETUP_CODE, name: 'Eltern' })).token;
-  const r = await api('POST', '/action', owner, { type: 'adhoc', name: 'Garage gefegt', min: 23 });
+  const kid = (await api('POST', '/action', owner, { type: 'saveMember', data: { name: 'Kind', role: 'child' } })).state.members.find(m => m.name === 'Kind').id;
+  const kt = (await api('POST', '/redeem', null, { token: (await api('POST', '/invite', owner, { memberId: kid })).url.split('#invite=')[1] })).token;
+  assert.equal((await api('POST', '/action', kt, { type: 'assignOneoff', name: 'Keller', min: 30, to: kid })).ok, false, 'Kind darf nicht anlegen');
+  assert.equal((await api('POST', '/action', owner, { type: 'assignOneoff', name: 'Keller', min: 0, to: kid })).ok, false);
+  assert.equal((await api('POST', '/action', owner, { type: 'assignOneoff', name: 'Keller', min: 9999, to: kid })).ok, false);
+  const r = await api('POST', '/action', owner, { type: 'assignOneoff', name: 'Keller aufräumen', min: 23, to: kid });
   assert.equal(r.ok, true);
-  const e = r.state.ledger.at(-1);
-  assert.equal(e.delta, 5); assert.equal(e.min, 23); assert.ok(e.ts);
-  assert.equal((await api('POST', '/action', owner, { type: 'adhoc', name: 'x', min: 0 })).ok, false);
-  assert.equal((await api('POST', '/action', owner, { type: 'adhoc', name: 'x', min: 9999 })).ok, false);
-  for (let i = 0; i < 30; i++) await api('POST', '/action', owner, { type: 'adhoc', name: 'Job ' + i, min: 5 });
+  const inst = r.state.inst.find(i => i.assignee === kid && r.state.catalog.find(c => c.id === i.catId).oneoff);
+  assert.equal(inst.mode, 'assigned');
+  const c = r.state.catalog.find(x => x.id === inst.catId);
+  assert.equal(c.pts, 5); assert.equal(c.archived, true);
+  // erscheint nicht als Pool-Aufgabe und nicht als bestehende Tätigkeit zum Buchen
+  assert.equal((await api('POST', '/action', owner, { type: 'book', id: inst.id })).ok, false);
+  const done = await api('POST', '/action', kt, { type: 'complete', id: inst.id });
+  assert.equal(done.ok, true);
+  const last = done.state.ledger.at(-1);
+  assert.equal(last.delta, 5); assert.equal(last.text.startsWith('Keller aufräumen'), true); assert.ok(last.ts); assert.equal(last.min, 23);
+  // Löschen einer offenen Ad-hoc-Aufgabe räumt auch den versteckten Katalogeintrag auf
+  const r2 = await api('POST', '/action', owner, { type: 'assignOneoff', name: 'Fenster', min: 10, to: kid });
+  const i2 = r2.state.inst.find(i => r2.state.catalog.find(c => c.id === i.catId && c.name === 'Fenster'));
+  const del = await api('POST', '/action', owner, { type: 'deleteInst', id: i2.id });
+  assert.ok(!del.state.catalog.some(c => c.name === 'Fenster'));
+  // Board: letzte 25
+  for (let i = 0; i < 30; i++) {
+    const x = await api('POST', '/action', owner, { type: 'assignOneoff', name: 'Job ' + i, min: 5, to: kid });
+    const id = x.state.inst.find(n => x.state.catalog.find(c => c.id === n.catId && c.name === 'Job ' + i)).id;
+    await api('POST', '/action', kt, { type: 'complete', id });
+  }
   const st = (await api('GET', '/state', owner)).state; L.setState(st);
-  const b = L.board(25); assert.equal(b.length, 25); assert.equal(b[0].text, 'Job 29');
+  const b = L.board(25); assert.equal(b.length, 25); assert.equal(b[0].text.startsWith('Job 29'), true);
   assert.equal(L.ptsFromMin(2), 1); assert.equal(L.ptsFromMin(60), 12);
-  const rm = await api('POST', '/action', owner, { type: 'removeEntry', id: e.id });
-  assert.equal(rm.ok, true); assert.ok(!rm.state.ledger.some(l => l.id === e.id));
-  // Katalogpunkte folgen immer der Zeit, auch bei manuell gesetztem Wert
   const sv = await api('POST', '/action', owner, { type: 'saveCat', data: { name: 'Test', min: 40, pts: 99, interval: 7 } });
   assert.equal(sv.state.catalog.find(c => c.name === 'Test').pts, 8);
 });

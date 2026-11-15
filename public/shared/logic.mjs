@@ -191,6 +191,7 @@ export function refreshPool() {
   const keep = new Set(Object.values(best).map(i => i.id));
   const before = S.inst.length;
   S.inst = S.inst.filter(i => i.status !== 'done' || keep.has(i.id) || diffDays(today(), i.doneAt) <= 120);
+  S.catalog = S.catalog.filter(c => !c.oneoff || S.inst.some(i => i.catId === c.id));
   if (S.ledger.length > 500) S.ledger = S.ledger.slice(-500);
   return n + (before - S.inst.length);
 }
@@ -304,7 +305,8 @@ export function deleteInst(instId, by) {
   const refunded = S.ledger.some(l => l.kind === 'missed' && l.inst === instId);
   S.ledger = S.ledger.filter(l => !(l.kind === 'missed' && l.inst === instId));
   S.inst = S.inst.filter(x => x.id !== instId);
-  if (c) c.snooze = today();
+  if (c && c.oneoff) S.catalog = S.catalog.filter(x => x.id !== c.id);
+  else if (c) c.snooze = today();
   return ok('Aufgabe gelöscht' + (refunded ? ', Strafpunkte entfallen' : '') + (c && c.interval ? '. Das Intervall startet heute neu.' : '.'));
 }
 export function escalations() {
@@ -402,23 +404,20 @@ export function stampText(l) {
 export function board(n) {
   return S.ledger.filter(l => l.delta > 0 && l.kind !== 'missed').slice(-(n || 25)).reverse();
 }
-export function adhoc(data, by) {
+export function assignOneoff(data, by) {
+  if (!isParent(by)) return err('Ad-hoc-Aufgaben legen nur Eltern an.');
   data = data || {};
-  const name = str(data.name, 80); if (!name) return err('Bitte beschreiben, was erledigt wurde.');
+  const name = str(data.name, 80); if (!name) return err('Bitte beschreiben, was zu tun ist.');
   const min = Math.round(Number(data.min));
-  if (!min || min < 1) return err('Bitte die Dauer in Minuten angeben.');
-  if (min > 480) return err('Höchstens 480 Minuten pro Eintrag.');
-  let who = by;
-  if (data.who && data.who !== by) { if (!isParent(by)) return err('Nur Eltern dürfen für andere eintragen.'); who = data.who; }
-  const m = memberById(who); if (!m) return err('Person nicht gefunden.');
-  const pts = ptsFromMin(min);
-  S.ledger.push({ id: uid('l'), member: who, delta: pts, text: name, date: today(), ts: Date.now(), min, kind: 'adhoc', by });
-  return ok('+' + pts + ' Punkte für ' + m.name + '.');
-}
-export function removeEntry(id, by) {
-  const l = S.ledger.find(x => x.id === id && x.kind === 'adhoc'); if (!l) return err('Eintrag nicht gefunden.');
-  if (!isParent(by) && !(l.by === by && l.ts && Date.now() - l.ts < 600000)) return err('Eigene Einträge lassen sich nur 10 Minuten lang zurücknehmen. Bitte frag ein Elternteil.');
-  S.ledger = S.ledger.filter(x => x.id !== id); return ok('Eintrag entfernt.');
+  if (!min || min < 1) return err('Bitte den Zeitaufwand in Minuten angeben.');
+  if (min > 480) return err('Höchstens 480 Minuten pro Aufgabe.');
+  const to = memberById(data.to); if (!to) return err('Person nicht gefunden.');
+  if (data.due && !isDate(data.due)) return err('Das Datum ist ungültig.');
+  if (S.catalog.filter(c => c.oneoff).length >= 200) return err('Zu viele Ad-hoc-Aufgaben auf einmal.');
+  const c = { id: uid('c'), name, cat: 'Ad hoc', room: '', interval: 0, min, pts: ptsFromMin(min), origin: 'adhoc', oneoff: true, archived: true, resp: { mode: 'pool' }, weekday: null, check: false, items: [] };
+  S.catalog.push(c);
+  S.inst.push({ id: uid('i'), catId: c.id, status: 'taken', assignee: to.id, mode: 'assigned', due: data.due || addDays(today(), 2), log: ['Ad hoc zugewiesen von ' + memberById(by).name + ' an ' + to.name] });
+  return ok('Zugewiesen an ' + to.name + ' (' + c.pts + ' Punkte).');
 }
 export function setPhotoMeta(memberId, by, on, stamp) {
   const m = memberById(memberId); if (!m) return err('Mitglied nicht gefunden.');

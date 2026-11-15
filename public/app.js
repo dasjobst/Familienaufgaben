@@ -240,7 +240,7 @@ function taskCard(i) {
   const a = primaryOf(i) + moreBtn(i);
   const cls = n > 0 && i.status === 'taken' ? ' ' + sevClass(n) : '';
   return '<article class="card' + cls + '"><div class="top"><h3>' + esc(c.name) + '</h3>' + pts + '</div>' +
-    '<div class="meta"><span class="chip">' + esc(c.cat) + '</span>' + (c.room ? '<span>' + esc(c.room) + '</span>' : '') + '<span>' + c.min + ' Min.</span><span>' + (c.weekday !== null && c.weekday !== undefined ? 'jeden ' + L.weekdayLabel(c.weekday) : L.freqLabel(c.interval)) + '</span></div>' +
+    '<div class="meta"><span class="chip">' + esc(c.cat) + '</span>' + (c.room ? '<span>' + esc(c.room) + '</span>' : '') + '<span>' + c.min + ' Min.</span><span>' + L.schedLabel(c) + '</span></div>' +
     '<div class="state">' + state + '</div>' + (c.items && c.items.length ? '<div class="hint">Check: ' + c.items.map(esc).join(' · ') + '</div>' : '') + (a ? '<div class="actions">' + a + '</div>' : '') + '</article>';
 }
 
@@ -274,14 +274,14 @@ function viewCatalog() {
   const parent = isParent();
   const cats = [...new Set(S.catalog.filter(c => !c.oneoff).map(c => c.cat))].sort();
   const list = S.catalog.filter(c => !c.oneoff && (filt.archive || !c.archived) && (!filt.cat || c.cat === filt.cat) && (!filt.q || c.name.toLowerCase().includes(filt.q.toLowerCase())));
-  list.sort((a, b) => { const ba = L.band(a.interval)[0], bb = L.band(b.interval)[0]; return ba - bb || a.name.localeCompare(b.name, 'de'); });
+  list.sort((a, b) => { const ba = L.catBand(a)[0], bb = L.catBand(b)[0]; return ba - bb || a.name.localeCompare(b.name, 'de'); });
   const searching = !!(filt.q || filt.cat);
   let h = '<section><div class="sec-h"><h2>Katalog</h2><span class="count">' + list.length + ' Tätigkeiten</span></div>';
   h += '<div class="filters"><input type="search" id="fq" placeholder="Suchen" value="' + esc(filt.q) + '" aria-label="Katalog durchsuchen"><select id="fc" aria-label="Kategorie"><option value="">Alle Kategorien</option>' + cats.map(c => '<option' + (c === filt.cat ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select><label class="chk check"><input type="checkbox" id="fa"' + (filt.archive ? ' checked' : '') + '> Archivierte anzeigen</label></div>';
   if (parent) h += '<div class="actions"><button class="btn primary small" data-act="catNew">+ Eigene Tätigkeit</button></div>';
   else h += '<p class="note">Den Katalog bearbeiten nur Eltern. Du kannst Aufgaben aus dem Pool buchen.</p>';
   const groups = [];
-  list.forEach(c => { const b = L.band(c.interval)[1]; let g = groups[groups.length - 1]; if (!g || g.b !== b) { g = { b, items: [] }; groups.push(g); } g.items.push(c); });
+  list.forEach(c => { const b = L.catBand(c)[1]; let g = groups[groups.length - 1]; if (!g || g.b !== b) { g = { b, items: [] }; groups.push(g); } g.items.push(c); });
   groups.forEach(g => {
     const open = searching || ui.bands.has(g.b);
     h += '<button class="band-btn" data-act="band" data-id="' + esc(g.b) + '" aria-expanded="' + open + '"><span>' + esc(g.b) + ' (' + g.items.length + ')</span><span>' + (open ? '▴' : '▾') + '</span></button>';
@@ -289,14 +289,15 @@ function viewCatalog() {
     g.items.forEach(c => {
       const act = L.activeInst(c.id);
       h += '<article class="card"><div class="top"><h3>' + esc(c.name) + (c.archived ? ' (archiviert)' : '') + '</h3><span class="pts">' + c.pts + ' Pkt</span></div>' +
-        '<div class="meta"><span class="chip">' + esc(c.cat) + '</span>' + (c.origin === 'familie' ? '<span class="chip fam">Familie</span>' : '') + '<span class="chip fam">' + esc(L.respLabel(c)) + '</span>' + (c.check ? '<span class="chip fam">Check</span>' : '') + (c.room ? '<span>' + esc(c.room) + '</span>' : '') + '<span>' + c.min + ' Min.</span><span>' + (c.weekday !== null && c.weekday !== undefined ? 'jeden ' + L.weekdayLabel(c.weekday) : L.freqLabel(c.interval)) + '</span></div>' +
-        (c.items && c.items.length ? '<div class="hint">Check: ' + c.items.map(esc).join(' · ') + '</div>' : '');
+        '<div class="meta"><span class="chip">' + esc(c.cat) + '</span>' + (c.origin === 'familie' ? '<span class="chip fam">Familie</span>' : '') + '<span class="chip fam">' + esc(L.respLabel(c)) + '</span>' + (c.check ? '<span class="chip fam">Check</span>' : '') + (c.room ? '<span>' + esc(c.room) + '</span>' : '') + '<span>' + c.min + ' Min.</span><span>' + L.schedLabel(c) + '</span></div>' +
+        (c.items && c.items.length ? '<div class="hint">Check: ' + c.items.map(esc).join(' · ') + '</div>' : '') +
+        (L.hasDates(c) ? (() => { const nx = c.dates.find(d => d >= L.today()), last = c.dates[c.dates.length - 1]; return '<div class="hint">' + (nx ? 'Nächster Termin: ' + L.fmtDateFull(nx) + ' · ' : '') + 'Termine bis ' + L.fmtDateFull(last) + (last < L.addDays(L.today(), 14) ? ' · <b class="late">bald keine Termine mehr, bitte ergänzen</b>' : '') + '</div>'; })() : '');
       if (parent) {
         h += '<div class="actions">';
         if (c.archived) h += '<button class="btn small" data-act="catRestore" data-id="' + esc(c.id) + '">Wiederherstellen</button>';
         else {
           h += '<button class="btn small" data-act="catEdit" data-id="' + esc(c.id) + '">Bearbeiten</button>';
-          if (!act && !(c.resp && c.resp.mode === 'each')) h += '<button class="btn small" data-act="catEnqueue" data-id="' + esc(c.id) + '">In den Pool</button>';
+          if (!act && !L.hasDates(c) && !(c.resp && c.resp.mode === 'each')) h += '<button class="btn small" data-act="catEnqueue" data-id="' + esc(c.id) + '">In den Pool</button>';
           h += '<button class="btn small danger" data-act="catDelete" data-id="' + esc(c.id) + '">Löschen</button>';
         }
         h += '</div>';
@@ -404,17 +405,18 @@ function catForm(c) {
   c = c || { name: '', cat: '', room: '', interval: 7, min: 15, pts: '' };
   const r = c.resp && c.resp.mode === 'each' ? c.resp.who : 'pool', sel = (c.resp && c.resp.ids) || [];
   const cats = [...new Set(S.catalog.filter(x => !x.oneoff).map(x => x.cat))].sort();
-  const advOpen = r !== 'pool' || (c.weekday !== null && c.weekday !== undefined) || c.check || (c.items && c.items.length);
+  const advOpen = (c.dates && c.dates.length) || r !== 'pool' || (c.weekday !== null && c.weekday !== undefined) || c.check || (c.items && c.items.length);
   return '<div class="field"><label for="f_name">Name der Tätigkeit</label><input id="f_name" name="name" required maxlength="80" value="' + esc(c.name) + '"></div>' +
     '<div class="grid2"><div class="field"><label for="f_cat">Kategorie</label><input id="f_cat" name="cat" list="catlist" maxlength="40" value="' + esc(c.cat) + '"><datalist id="catlist">' + cats.map(x => '<option value="' + esc(x) + '">').join('') + '</datalist></div>' +
     '<div class="field"><label for="f_room">Raum</label><input id="f_room" name="room" maxlength="40" value="' + esc(c.room) + '"></div></div>' +
     '<div class="grid2"><div class="field"><label for="f_int">Intervall in Tagen</label><input id="f_int" name="interval" type="number" min="0" value="' + c.interval + '"><span class="hint">0 = nur manuell. 1 täglich, 7 wöchentlich, 30 monatlich.</span></div>' +
     '<div class="field"><label for="f_min">Aufwand in Minuten</label><input id="f_min" name="min" type="number" min="1" value="' + c.min + '"></div></div>' +
     '<p class="hint">Punkte entstehen immer aus dem Aufwand: 5 Minuten = 1 Punkt (mindestens 1). Selbst gebucht gibt Bonus.</p>' +
-    '<details class="adv"' + (advOpen ? ' open' : '') + '><summary>Erweitert: Verantwortung, fester Tag, Check</summary>' +
+    '<details class="adv"' + (advOpen ? ' open' : '') + '><summary>Erweitert: Verantwortung, feste Termine, Check</summary>' +
     '<div class="field"><label for="f_resp">Verantwortung</label><select id="f_resp" name="resp">' + [['pool', 'Pool: wer will, bucht'], ['all', 'Jede Person einzeln: alle'], ['children', 'Jede Person einzeln: nur Kinder'], ['parents', 'Jede Person einzeln: nur Eltern'], ['custom', 'Jede Person einzeln: Auswahl']].map(o => '<option value="' + o[0] + '"' + (o[0] === r ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>' +
     '<div class="choices">' + S.members.map(m => '<label class="check"><input type="checkbox" name="ids" value="' + esc(m.id) + '"' + (sel.includes(m.id) ? ' checked' : '') + '> ' + esc(m.name) + '</label>').join('') + '</div><span class="hint">Die Namen gelten nur bei „Auswahl“. Beim Einzelmodus bekommt jede zuständige Person ihre eigene Aufgabe, zum Beispiel Bett machen.</span></div>' +
     '<div class="field"><label for="f_wd">Fester Wochentag</label><select id="f_wd" name="weekday"><option value="">Kein fester Tag</option>' + [[1, 'Montag'], [2, 'Dienstag'], [3, 'Mittwoch'], [4, 'Donnerstag'], [5, 'Freitag'], [6, 'Samstag'], [0, 'Sonntag']].map(o => '<option value="' + o[0] + '"' + (c.weekday === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select><span class="hint">Setzt das Intervall auf wöchentlich.</span></div>' +
+    '<div class="field"><label for="f_dates">Feste Termine (ein Datum pro Zeile)</label><textarea id="f_dates" name="dates" rows="4" placeholder="17.11.2026" style="background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px;width:100%;font:inherit;color:inherit">' + esc((c.dates || []).map(L.fmtDateFull).join('\n')) + '</textarea><span class="hint">Gilt statt Intervall und Wochentag. Die Aufgabe erscheint 3 Tage vor dem Termin im Pool und ist am Termin fällig.</span></div>' +
     '<label class="check"><input type="checkbox" name="check"' + (c.check ? ' checked' : '') + '> Punkte erst nach Bestätigung durch Eltern</label>' +
     '<div class="field"><label for="f_items">Checkliste (eine Zeile pro Punkt)</label><textarea id="f_items" name="items" rows="3" style="background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px;width:100%;font:inherit;color:inherit">' + esc((c.items || []).join('\n')) + '</textarea></div></details>';
 }

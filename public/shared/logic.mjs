@@ -19,8 +19,27 @@ export function getState() { return S; }
 
 export function addDays(s, n) { const p = s.split('-').map(Number); return new Date(Date.UTC(p[0], p[1] - 1, p[2] + n)).toISOString().slice(0, 10); }
 export function diffDays(a, b) { const pa = a.split('-').map(Number), pb = b.split('-').map(Number); return Math.round((Date.UTC(pa[0], pa[1] - 1, pa[2]) - Date.UTC(pb[0], pb[1] - 1, pb[2])) / DAY); }
+export function fmtDateFull(s) { const p = s.split('-'); return p[2] + '.' + p[1] + '.' + p[0]; }
+export function parseDates(text) {
+  const out = new Set();
+  for (const raw of String(text || '').split(/[\n,;]+/)) {
+    const t = raw.trim(); if (!t) continue;
+    let iso = null, m;
+    if ((m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(t))) iso = m[1] + '-' + m[2].padStart(2, '0') + '-' + m[3].padStart(2, '0');
+    else if ((m = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec(t))) iso = m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
+    if (!iso || !isDate(iso)) return null;
+    out.add(iso);
+  }
+  return [...out].sort();
+}
+export function hasDates(c) { return !!(c && c.dates && c.dates.length); }
+export function schedLabel(c) {
+  if (hasDates(c)) return 'feste Termine';
+  return (c.weekday !== null && c.weekday !== undefined) ? 'jeden ' + weekdayLabel(c.weekday) : freqLabel(c.interval);
+}
+export function catBand(c) { return hasDates(c) ? [0, 'Feste Termine'] : band(c.interval); }
 export function fmtDate(s) { const p = s.split('-'); return p[2] + '.' + p[1] + '.'; }
-export function isDate(s) { return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s)); }
+export function isDate(s) { return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && new Date(s + 'T00:00:00Z').toISOString().slice(0, 10) === s; }
 export function dueText(due) { const d = diffDays(due, today()); if (d < 0) return (-d) + (d === -1 ? ' Tag' : ' Tage') + ' überfällig'; if (d === 0) return 'heute fällig'; if (d === 1) return 'morgen fällig'; return 'fällig in ' + d + ' Tagen'; }
 export function freqLabel(n) {
   if (!n) return 'nur manuell'; if (n === 1) return 'täglich'; if (n === 7) return 'wöchentlich'; if (n === 14) return 'alle 2 Wochen';
@@ -169,10 +188,42 @@ export function missedStats(memberId, days) {
   return { n, pts };
 }
 
+const MUELL = [
+  { name: 'Rest- und Biomüll rausbringen', min: 10, dates: ['2026-11-03', '2026-11-17', '2026-12-01', '2026-12-15', '2026-12-29'] },
+  { name: 'Gelben Sack rausbringen', min: 5, dates: ['2026-11-05', '2026-12-03', '2026-12-31'] },
+  { name: 'Papiertonne rausbringen', min: 5, dates: ['2026-11-24', '2026-12-21'] }
+];
+function migrate() {
+  S.mig = S.mig || {};
+  if (S.mig.muell1) return 0;
+  S.mig.muell1 = true;
+  S.catalog.filter(c => !c.oneoff && c.name.trim().toLowerCase() === 'müll rausbringen').forEach(c => {
+    const gone = new Set(S.inst.filter(i => i.catId === c.id && i.status !== 'done').map(i => i.id));
+    S.ledger = S.ledger.filter(l => !(l.kind === 'missed' && gone.has(l.inst)));
+    S.inst = S.inst.filter(i => !gone.has(i.id));
+    const hasHistory = S.inst.some(i => i.catId === c.id && i.status === 'done' && !i.seed) || S.ledger.some(l => l.text.indexOf(c.name) !== -1);
+    if (hasHistory) c.archived = true; else { S.catalog = S.catalog.filter(x => x.id !== c.id); S.inst = S.inst.filter(i => i.catId !== c.id); }
+  });
+  MUELL.forEach(m => {
+    if (S.catalog.some(c => c.name === m.name && !c.archived)) return;
+    S.catalog.push({ id: uid('c'), name: m.name, cat: 'Müll & Entsorgung', room: 'Draußen', interval: 0, min: m.min, pts: ptsFromMin(m.min), origin: 'standard', archived: false, resp: { mode: 'pool' }, weekday: null, check: false, items: [], dates: m.dates.slice() });
+  });
+  return 1;
+}
 export function refreshPool() {
-  let n = settleMissed();
+  let n = migrate() + settleMissed();
   S.catalog.forEach(c => {
-    if (c.archived || !c.interval) return;
+    if (c.archived || !hasDates(c)) return;
+    c.dates.forEach(d => {
+      const k = diffDays(d, today());
+      if (k < 0 || k > HORIZON) return;
+      if ((c.skip || []).includes(d) || S.inst.some(i => i.catId === c.id && i.fixed === d)) return;
+      S.inst.push({ id: uid('i'), catId: c.id, status: 'open', assignee: null, mode: null, due: d, fixed: d, log: [] });
+      n++;
+    });
+  });
+  S.catalog.forEach(c => {
+    if (c.archived || !c.interval || hasDates(c)) return;
     const each = !!(c.resp && c.resp.mode === 'each');
     (each ? targetsOf(c) : [null]).forEach(m => {
       const mid = m ? m.id : null;
@@ -225,6 +276,7 @@ export function enqueue(catId, by) {
   if (!isParent(by)) return err('Nur Eltern dürfen Aufgaben in den Pool stellen.');
   const c = catById(catId); if (!c) return err('Tätigkeit nicht gefunden.');
   if (c.resp && c.resp.mode === 'each') return err('Diese Tätigkeit wird automatisch an jede zuständige Person vergeben.');
+  if (hasDates(c)) return err('Diese Tätigkeit hat feste Termine und wird automatisch rechtzeitig in den Pool gestellt.');
   if (activeInst(catId)) return err('Diese Tätigkeit läuft bereits.');
   S.inst.push({ id: uid('i'), catId, status: 'open', assignee: null, mode: null, due: addDays(today(), 2), log: [] });
   return ok('In den Pool gestellt.');
@@ -306,7 +358,7 @@ export function deleteInst(instId, by) {
   S.ledger = S.ledger.filter(l => !(l.kind === 'missed' && l.inst === instId));
   S.inst = S.inst.filter(x => x.id !== instId);
   if (c && c.oneoff) S.catalog = S.catalog.filter(x => x.id !== c.id);
-  else if (c) c.snooze = today();
+  else if (c) { c.snooze = today(); if (i.fixed) (c.skip = c.skip || []).push(i.fixed); }
   return ok('Aufgabe gelöscht' + (refunded ? ', Strafpunkte entfallen' : '') + (c && c.interval ? '. Das Intervall startet heute neu.' : '.'));
 }
 export function escalations() {
@@ -329,14 +381,18 @@ export function saveCat(data, by) {
   if (weekday !== null && !(Number.isInteger(weekday) && weekday >= 0 && weekday <= 6)) weekday = null;
   const check = data.check === 'on' || data.check === true;
   const items = String(data.items || '').split('\n').map(x => x.trim().slice(0, 60)).filter(Boolean).slice(0, 10);
+  const dates = parseDates(data.dates);
+  if (dates === null) return err('Ein Termin ist ungültig. Bitte je Zeile ein Datum wie 17.11.2026 eintragen.');
+  if (dates.length > 150) return err('Höchstens 150 Termine.');
   const clash = S.catalog.find(c => c.name.toLowerCase() === name.toLowerCase() && c.id !== data.id && !c.archived);
   if (clash) return err('Es gibt schon eine Tätigkeit mit diesem Namen.');
   if (data.id) {
     const c = catById(data.id); if (!c) return err('Tätigkeit nicht gefunden.');
-    Object.assign(c, { name, cat, room, interval: weekday !== null ? 7 : interval, min, pts, resp, weekday, check, items });
+    const fx = dates.length > 0;
+    Object.assign(c, { name, cat, room, interval: fx ? 0 : (weekday !== null ? 7 : interval), min, pts, resp, weekday: fx ? null : weekday, check, items, dates });
     return ok('Gespeichert.');
   }
-  S.catalog.push({ id: uid('c'), name, cat, room, interval: weekday !== null ? 7 : interval, min, pts, origin: 'familie', archived: false, resp, weekday, check, items });
+  { const fx = dates.length > 0; S.catalog.push({ id: uid('c'), name, cat, room, interval: fx ? 0 : (weekday !== null ? 7 : interval), min, pts, origin: 'familie', archived: false, resp, weekday: fx ? null : weekday, check, items, dates }); }
   return ok('Zum Katalog hinzugefügt.');
 }
 export function removeCat(id, by) {

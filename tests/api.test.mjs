@@ -201,7 +201,7 @@ test('Eltern löschen nicht erledigte Aufgaben, Kinder nicht, Erledigtes bleibt'
   const nik = await addMember(call, owner, 'Nikolas', 'child', '');
   const kid = (await login(call, owner, nik)).token;
   const st = (await call('GET', '/state', { token: kid })).json.state;
-  const open = st.inst.filter(i => i.status === 'open');
+  const open = st.inst.filter(i => i.status === 'open' && st.catalog.find(c => c.id === i.catId).interval > 0);
   const t1 = open[0], t2 = open[1];
   await call('POST', '/action', { token: kid, body: { type: 'book', id: t1.id } });
   // Kind darf nicht löschen
@@ -217,7 +217,7 @@ test('Eltern löschen nicht erledigte Aufgaben, Kinder nicht, Erledigtes bleibt'
   await call('POST', '/action', { token: kid, body: { type: 'complete', id: t2.id } });
   assert.equal((await call('POST', '/action', { token: owner, body: { type: 'deleteInst', id: t2.id } })).json.ok, false);
   // Pool-Aufgabe ohne Bearbeiter lässt sich ebenfalls löschen
-  const pool = (await call('GET', '/state', { token: owner })).json.state.inst.find(i => i.status === 'open');
+  const pool = (await call('GET', '/state', { token: owner })).json.state.inst.find(i => i.status === 'open' && i.catId !== t1.catId);
   assert.equal((await call('POST', '/action', { token: owner, body: { type: 'deleteInst', id: pool.id } })).json.ok, true);
   // Nach Ablauf des Intervalls kommt die Aufgabe wieder
   const c = st.catalog.find(x => x.id === t1.catId);
@@ -533,4 +533,36 @@ test('Adminrolle: Nutzerverwaltung nur zentral beim Admin, Eltern behalten Aufga
   const legacy = JSON.parse(JSON.stringify((await api('GET', '/state', par)).state)); legacy.members.forEach(m => { if (m.role === 'admin') m.role = 'parent'; });
   L.setState(legacy); assert.equal(legacy.members.filter(m => m.role === 'admin').length, 1);
   assert.equal(L.isParent(kid), false);
+});
+
+test('Müll-Termine: Migration ersetzt die alte Aufgabe, feste Termine erscheinen 3 Tage vorher', async () => {
+  const { call, owner } = await setupFamily();
+  const st0 = (await call('GET', '/state', { token: owner })).json.state;
+  assert.ok(!st0.catalog.some(c => c.name === 'Müll rausbringen' && !c.archived), 'alte Aufgabe weg');
+  assert.ok(!st0.inst.some(i => st0.catalog.find(c => c.id === i.catId).name === 'Müll rausbringen'));
+  const rb = st0.catalog.find(c => c.name === 'Rest- und Biomüll rausbringen');
+  assert.deepEqual(rb.dates, ['2026-11-03', '2026-11-17', '2026-12-01', '2026-12-15', '2026-12-29']);
+  assert.equal(st0.catalog.find(c => c.name === 'Gelben Sack rausbringen').dates.length, 3);
+  assert.deepEqual(st0.catalog.find(c => c.name === 'Papiertonne rausbringen').dates, ['2026-11-24', '2026-12-21']);
+  // heute 14.11.: Rest+Bio am 17.11. liegt im Vorlauf, Papier am 24.11. noch nicht
+  const inst = st0.inst.filter(i => i.fixed);
+  assert.deepEqual(inst.map(i => i.due), ['2026-11-17']);
+  assert.equal(inst[0].status, 'open');
+  // Ein-Tages-Genauigkeit: am 21.11. kommt die Papiertonne vom 24.11., der Termin am 17.11. bleibt einmalig
+  L.setNow('2026-11-21'); const st1 = (await call('GET', '/state', { token: owner })).json.state;
+  assert.deepEqual(st1.inst.filter(i => i.fixed).map(i => i.due).sort(), ['2026-11-17', '2026-11-24']);
+  // Löschen einer Terminaufgabe lässt sie nicht neu entstehen
+  const gone = st1.inst.find(i => i.fixed === '2026-11-24');
+  await call('POST', '/action', { token: owner, body: { type: 'deleteInst', id: gone.id } });
+  L.setNow('2026-11-22'); const st2 = (await call('GET', '/state', { token: owner })).json.state;
+  assert.ok(!st2.inst.some(i => i.fixed === '2026-11-24'));
+  L.setNow('2026-11-14');
+  // Pool-Buchen nicht möglich per enqueue
+  const e = await call('POST', '/action', { token: owner, body: { type: 'enqueue', id: rb.id } });
+  assert.equal(e.json.ok, false);
+  // Bearbeiten mit deutschem Datumsformat, ungültiges Datum wird abgelehnt
+  const bad = await call('POST', '/action', { token: owner, body: { type: 'saveCat', data: { id: rb.id, name: rb.name, min: 10, dates: '31.02.2026' } } });
+  assert.equal(bad.json.ok, false);
+  const good = await call('POST', '/action', { token: owner, body: { type: 'saveCat', data: { id: rb.id, name: rb.name, min: 10, dates: '12.01.2027\n26.01.2027\n12.01.2027' } } });
+  assert.deepEqual(good.json.state.catalog.find(c => c.id === rb.id).dates, ['2027-01-12', '2027-01-26']);
 });

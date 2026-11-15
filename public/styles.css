@@ -138,3 +138,10 @@ details.adv[open]{padding-bottom:12px;display:flex;flex-direction:column;gap:12p
 .toast{display:flex;align-items:center;gap:12px}
 .toast-btn{background:none;border:1px solid currentColor;color:inherit;border-radius:8px;padding:6px 12px;min-height:36px;cursor:pointer;font-weight:600}
 .neg{color:var(--crit)}
+
+.feed{padding:4px 14px}
+.frow{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--line)}
+.frow:first-child{border-top:0}
+.frow .t{flex:1;min-width:0}
+.frow .t b{font-weight:600;overflow-wrap:anywhere}
+.frow .fr{display:flex;align-items:center;gap:6px;flex:none}

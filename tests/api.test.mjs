@@ -418,3 +418,27 @@ test('Mitglied löschen: Aufgaben zurück in den Pool, Konto, Sitzungen und Foto
   assert.equal(r.state.inst.find(i => i.id === pool.id).status, 'open');
   assert.equal((await api('GET', '/state', kt)).ok, false, 'Sitzung des gelöschten Kindes ungültig');
 });
+
+test('Ad-hoc-Einträge und Board: Punkte aus Minuten, letzte 25, Rücknahme', async () => {
+  const store = memoryStore(), env = { SETUP_CODE: 'adhoc-setup-code-12345' };
+  const api = async (method, path, token, body) => {
+    const h = { 'content-type': 'application/json' }; if (token) h.authorization = 'Bearer ' + token;
+    return (await handle(new Request('https://x/api' + path, { method, headers: h, body: body ? JSON.stringify(body) : undefined }), { store, env })).json();
+  };
+  const owner = (await api('POST', '/setup', null, { code: env.SETUP_CODE, name: 'Eltern' })).token;
+  const r = await api('POST', '/action', owner, { type: 'adhoc', name: 'Garage gefegt', min: 23 });
+  assert.equal(r.ok, true);
+  const e = r.state.ledger.at(-1);
+  assert.equal(e.delta, 5); assert.equal(e.min, 23); assert.ok(e.ts);
+  assert.equal((await api('POST', '/action', owner, { type: 'adhoc', name: 'x', min: 0 })).ok, false);
+  assert.equal((await api('POST', '/action', owner, { type: 'adhoc', name: 'x', min: 9999 })).ok, false);
+  for (let i = 0; i < 30; i++) await api('POST', '/action', owner, { type: 'adhoc', name: 'Job ' + i, min: 5 });
+  const st = (await api('GET', '/state', owner)).state; L.setState(st);
+  const b = L.board(25); assert.equal(b.length, 25); assert.equal(b[0].text, 'Job 29');
+  assert.equal(L.ptsFromMin(2), 1); assert.equal(L.ptsFromMin(60), 12);
+  const rm = await api('POST', '/action', owner, { type: 'removeEntry', id: e.id });
+  assert.equal(rm.ok, true); assert.ok(!rm.state.ledger.some(l => l.id === e.id));
+  // Katalogpunkte folgen immer der Zeit, auch bei manuell gesetztem Wert
+  const sv = await api('POST', '/action', owner, { type: 'saveCat', data: { name: 'Test', min: 40, pts: 99, interval: 7 } });
+  assert.equal(sv.state.catalog.find(c => c.name === 'Test').pts, 8);
+});

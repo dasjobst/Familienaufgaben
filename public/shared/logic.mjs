@@ -8,7 +8,8 @@ let S = null;
 const berlin = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' });
 export function setNow(d) { NOW = d || null; }
 export function today() { return NOW || berlin.format(new Date()); }
-export function setState(s) { S = s; }
+export function ptsFromMin(min) { return Math.max(1, Math.round((Number(min) || 0) / 5)); }
+export function setState(s) { S = s; if (S && S.catalog) S.catalog.forEach(c => { c.pts = ptsFromMin(c.min); }); }
 export function getState() { return S; }
 
 export function addDays(s, n) { const p = s.split('-').map(Number); return new Date(Date.UTC(p[0], p[1] - 1, p[2] + n)).toISOString().slice(0, 10); }
@@ -244,7 +245,7 @@ function finish(i) {
   const pts = pointsFor(i), prev = i.status, before = new Set(S.inst.map(x => x.id));
   i.status = 'done'; i.doneAt = today(); i.points = pts; i.log.push('Erledigt');
   const lid = uid('l');
-  S.ledger.push({ id: lid, member: i.assignee, delta: pts, text: catById(i.catId).name + (i.mode === 'booked' ? ' (gebucht)' : ' (zugewiesen)'), date: today(), inst: i.id });
+  S.ledger.push({ id: lid, member: i.assignee, delta: pts, text: catById(i.catId).name + (i.mode === 'booked' ? ' (gebucht)' : ' (zugewiesen)'), date: today(), ts: Date.now(), min: catById(i.catId).min, inst: i.id });
   refreshPool();
   i.undo = { at: Date.now(), ledgerId: lid, prev, next: S.inst.filter(x => !before.has(x.id)).map(x => x.id) };
   return pts;
@@ -309,7 +310,7 @@ export function saveCat(data, by) {
   const name = str(data.name, 80); if (!name) return err('Bitte einen Namen eingeben.');
   const interval = Math.min(3650, Math.max(0, Math.round(Number(data.interval) || 0)));
   const min = Math.min(1440, Math.max(1, Math.round(Number(data.min) || 0) || 1));
-  let pts = Math.round(Number(data.pts)); if (!pts || pts < 1) pts = Math.max(1, Math.round(min / 5)); pts = Math.min(1000, pts);
+  const pts = ptsFromMin(min);
   const cat = str(data.cat, 40) || 'Sonstiges', room = str(data.room, 40);
   const respMode = ['pool', 'all', 'children', 'parents', 'custom'].includes(data.resp) ? data.resp : 'pool';
   const ids = [].concat(data.ids || []).filter(id => memberById(id)).slice(0, 20);
@@ -383,6 +384,35 @@ export function removeMember(id, by) {
   });
   S.members = S.members.filter(x => x.id !== id);
   return ok(m.name + ' wurde gelöscht.' + (back ? ' ' + back + ' Aufgabe(n) liegen wieder im Pool.' : ''));
+}
+const berlinTime = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' });
+export function stampText(l) {
+  if (!l.ts) return fmtDate(l.date);
+  const d = new Date(l.ts), day = berlin.format(d), t = berlinTime.format(d);
+  if (day === today()) return 'heute ' + t;
+  if (day === addDays(today(), -1)) return 'gestern ' + t;
+  return fmtDate(day) + ' ' + t;
+}
+export function board(n) {
+  return S.ledger.filter(l => l.delta > 0 && l.kind !== 'missed').slice(-(n || 25)).reverse();
+}
+export function adhoc(data, by) {
+  data = data || {};
+  const name = str(data.name, 80); if (!name) return err('Bitte beschreiben, was erledigt wurde.');
+  const min = Math.round(Number(data.min));
+  if (!min || min < 1) return err('Bitte die Dauer in Minuten angeben.');
+  if (min > 480) return err('Höchstens 480 Minuten pro Eintrag.');
+  let who = by;
+  if (data.who && data.who !== by) { if (!isParent(by)) return err('Nur Eltern dürfen für andere eintragen.'); who = data.who; }
+  const m = memberById(who); if (!m) return err('Person nicht gefunden.');
+  const pts = ptsFromMin(min);
+  S.ledger.push({ id: uid('l'), member: who, delta: pts, text: name, date: today(), ts: Date.now(), min, kind: 'adhoc', by });
+  return ok('+' + pts + ' Punkte für ' + m.name + '.');
+}
+export function removeEntry(id, by) {
+  const l = S.ledger.find(x => x.id === id && x.kind === 'adhoc'); if (!l) return err('Eintrag nicht gefunden.');
+  if (!isParent(by) && !(l.by === by && l.ts && Date.now() - l.ts < 600000)) return err('Eigene Einträge lassen sich nur 10 Minuten lang zurücknehmen. Bitte frag ein Elternteil.');
+  S.ledger = S.ledger.filter(x => x.id !== id); return ok('Eintrag entfernt.');
 }
 export function setPhotoMeta(memberId, by, on, stamp) {
   const m = memberById(memberId); if (!m) return err('Mitglied nicht gefunden.');

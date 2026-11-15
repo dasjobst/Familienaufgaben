@@ -88,6 +88,8 @@ const ACTIONS = {
   removeCat: (p, by) => L.removeCat(p.id, by),
   restoreCat: (p, by) => L.restoreCat(p.id, by),
   saveMember: (p, by) => L.saveMember(p.data, by),
+  adhoc: (p, by) => L.adhoc(p, by),
+  removeEntry: (p, by) => L.removeEntry(p.id, by),
   removeMember: (p, by) => L.removeMember(p.id, by),
   setBonus: (p, by) => L.setBonus(p.value, by)
 };

@@ -295,11 +295,19 @@ export function transfer(instId, toId, by) {
 }
 export function release(instId, by) {
   const i = instById(instId); if (!i) return err('Aufgabe nicht gefunden.');
-  if (i.status !== 'taken' || i.mode !== 'booked') return err('Nur selbst gebuchte Aufgaben gehen zurück in den Pool.');
-  if (by !== i.assignee) return err('Nur wer gebucht hat, kann zurückgeben.');
-  if (diffDays(i.due, today()) < 0) return err('Überfällige Aufgaben lassen sich nicht mehr zurückgeben. Übertrage sie stattdessen.');
-  i.status = 'open'; i.assignee = null; i.mode = null; i.log.push('Zurück in den Pool');
-  return ok('Zurück im Pool.');
+  if (i.status !== 'taken' || i.mode !== 'booked') return err('Nur selbst gebuchte Aufgaben lassen sich aufheben. Zugewiesene werden übertragen.');
+  const self = by === i.assignee, was = memberById(i.assignee), who = memberById(by);
+  if (!self && !isParent(by)) return err('Nur die Person selbst oder Eltern dürfen eine Buchung aufheben.');
+  if (self && diffDays(i.due, today()) < 0) return err('Überfällige Aufgaben lassen sich nicht mehr zurückgeben. Übertrage sie stattdessen.');
+  let refund = 0;
+  if (!self) {
+    // Entscheidung der Eltern: Strafpunkte dieser Buchung entfallen
+    S.ledger = S.ledger.filter(l => { if (l.kind === 'missed' && l.inst === i.id) { refund += -l.delta; return false; } return true; });
+    i.penalized = false;
+  }
+  i.status = 'open'; i.assignee = null; i.mode = null;
+  i.log.push(self ? 'Zurück in den Pool' : 'Buchung von ' + (was ? was.name : '?') + ' aufgehoben von ' + (who ? who.name : '?'));
+  return ok(self ? 'Zurück im Pool.' : 'Buchung von ' + (was ? was.name : '?') + ' aufgehoben, die Aufgabe liegt wieder im Pool' + (refund ? ' (Strafpunkte entfallen)' : '') + '.');
 }
 function finish(i) {
   const pts = pointsFor(i), prev = i.status, before = new Set(S.inst.map(x => x.id));

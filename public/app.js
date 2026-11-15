@@ -212,6 +212,7 @@ function moreItems(i) {
   if (i.status === 'taken') {
     if (mine || p) items.push(['transferPick', 'Übertragen']);
     if (i.mode === 'booked' && mine && overdue(i) === 0) items.push(['release', 'Zurück in den Pool']);
+    else if (i.mode === 'booked' && !mine && p) items.push(['releasePick', 'Buchung aufheben']);
   }
   if (p && i.status !== 'done') items.push(['instDelete', 'Löschen', true]);
   return items;
@@ -439,6 +440,10 @@ document.addEventListener('click', async e => {
   if (a === 'book') act('book', { id });
   else if (a === 'complete') act('complete', { id });
   else if (a === 'release') act('release', { id });
+  else if (a === 'releasePick') {
+    const i = L.instById(id), c = L.catById(i.catId), w = L.memberById(i.assignee);
+    modal('Buchung aufheben', '<p>„' + esc(c.name) + '“ von ' + esc(w ? w.name : '?') + ' zurück in den Pool legen?' + (overdue(i) > 0 ? ' Strafpunkte für diese Aufgabe entfallen.' : '') + '</p>', 'Buchung aufheben', () => act('release', { id }), true);
+  }
   else if (a === 'approve') act('approve', { id });
   else if (a === 'more') openSheet(id);
   else if (a === 'togglePool') { ui.poolAll = !ui.poolAll; render(); }

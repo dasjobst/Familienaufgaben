@@ -566,3 +566,31 @@ test('Müll-Termine: Migration ersetzt die alte Aufgabe, feste Termine erscheine
   const good = await call('POST', '/action', { token: owner, body: { type: 'saveCat', data: { id: rb.id, name: rb.name, min: 10, dates: '12.01.2027\n26.01.2027\n12.01.2027' } } });
   assert.deepEqual(good.json.state.catalog.find(c => c.id === rb.id).dates, ['2027-01-12', '2027-01-26']);
 });
+
+test('Buchung aufheben: selbst nur vor Fälligkeit, Eltern jederzeit mit Rückerstattung', async () => {
+  const { call, owner } = await setupFamily();
+  const nik = await addMember(call, owner, 'Nikolas', 'child', '');
+  const kid = (await login(call, owner, nik)).token;
+  const st = (await call('GET', '/state', { token: kid })).json.state;
+  const t = st.inst.find(i => i.status === 'open' && !i.fixed && st.catalog.find(c => c.id === i.catId).interval >= 7 && st.catalog.find(c => c.id === i.catId).weekday == null && !(st.catalog.find(c => c.id === i.catId).resp && st.catalog.find(c => c.id === i.catId).resp.mode === 'each'));
+  assert.equal((await call('POST', '/action', { token: kid, body: { type: 'book', id: t.id } })).json.ok, true);
+  // Eltern heben die Buchung des Kindes auf
+  const r = await call('POST', '/action', { token: owner, body: { type: 'release', id: t.id } });
+  assert.equal(r.json.ok, true); assert.equal(r.json.state.inst.find(i => i.id === t.id).status, 'open');
+  // Kind kann fremde Buchungen nicht aufheben (Eltern buchen, Kind versucht)
+  await call('POST', '/action', { token: owner, body: { type: 'book', id: t.id } });
+  assert.equal((await call('POST', '/action', { token: kid, body: { type: 'release', id: t.id } })).json.ok, false);
+  await call('POST', '/action', { token: owner, body: { type: 'release', id: t.id } });
+  // Überfällig: selbst nicht, Eltern ja und Strafpunkte kommen zurück
+  await call('POST', '/action', { token: kid, body: { type: 'book', id: t.id } });
+  const c = st.catalog.find(x => x.id === t.catId);
+  L.setNow(L.addDays('2026-11-14', 4));
+  const late = (await call('GET', '/state', { token: kid })).json.state;
+  const pen = late.ledger.filter(l => l.kind === 'missed' && l.inst === t.id).length;
+  assert.ok(pen > 0, 'Strafpunkte entstanden');
+  assert.equal((await call('POST', '/action', { token: kid, body: { type: 'release', id: t.id } })).json.ok, false);
+  const rel = await call('POST', '/action', { token: owner, body: { type: 'release', id: t.id } });
+  L.setNow('2026-11-14');
+  assert.equal(rel.json.ok, true, rel.json.msg);
+  assert.ok(!rel.json.state.ledger.some(l => l.kind === 'missed' && l.inst === t.id), 'Strafpunkte erstattet');
+});

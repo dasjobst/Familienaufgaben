@@ -371,6 +371,32 @@ function finish(i) {
   i.undo = { at: Date.now(), ledgerId: lid, prev, next: S.inst.filter(x => !before.has(x.id)).map(x => x.id) };
   return pts;
 }
+export function revertDone(ledgerId, mode, by) {
+  if (!isParent(by)) return err('Erledigungen nehmen nur Eltern zurück.');
+  const l = S.ledger.find(x => x.id === ledgerId && x.delta > 0 && x.kind !== 'missed');
+  if (!l) return err('Eintrag nicht gefunden.');
+  const i = l.inst ? instById(l.inst) : null, who = memberById(l.member);
+  const reopen = mode === 'reopen' && i && i.status === 'done';
+  if (reopen) {
+    const c = catById(i.catId);
+    if (S.inst.some(x => x.id !== i.id && x.catId === i.catId && x.status !== 'done' && (x.assignee === i.assignee || !(c && c.resp && c.resp.mode === 'each')))) {
+      return err('Zu dieser Tätigkeit läuft schon eine neue Aufgabe. Bitte stattdessen löschen.');
+    }
+  }
+  S.ledger = S.ledger.filter(x => x.id !== ledgerId);
+  if (i && i.status === 'done') {
+    if (reopen) {
+      const minDue = addDays(today(), 1);
+      i.status = 'taken'; if (i.due < minDue) i.due = minDue;
+      delete i.doneAt; delete i.points; delete i.undo; i.log.push('Erledigung zurückgenommen');
+    } else {
+      const c = catById(i.catId);
+      if (i.fixed && c) (c.skip = c.skip || []).push(i.fixed);
+      S.inst = S.inst.filter(x => x.id !== i.id);
+    }
+  }
+  return ok('Erledigung von ' + (who ? who.name : '?') + ' zurückgenommen, ' + l.delta + ' Punkte abgezogen' + (reopen ? '. Die Aufgabe ist wieder offen.' : '.'));
+}
 export function undo(instId, by) {
   const i = instById(instId);
   if (!i || i.status !== 'done' || !i.undo) return err('Das lässt sich nicht mehr rückgängig machen.');

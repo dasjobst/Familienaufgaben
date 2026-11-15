@@ -644,3 +644,31 @@ test('Statistik: Zeitleiste, Kategorien, Wochentage, Kennzahlen', async () => {
   assert.equal(L.stats('month').days.length, 14); assert.equal(L.stats('all').days.length, 12);
   assert.equal(w.kpi.quote, Math.round(2 / (2 + w.kpi.missed) * 100));
 });
+
+test('Erledigung zurücknehmen: nur Eltern, wieder öffnen oder löschen, Punkte weg', async () => {
+  const { call, owner } = await setupFamily();
+  const nik = await addMember(call, owner, 'Nikolas', 'child', '');
+  const kid = (await login(call, owner, nik)).token;
+  const pick = async () => { const s = (await call('GET', '/state', { token: kid })).json.state; return s.inst.find(i => i.status === 'open' && !i.fixed && s.catalog.find(c => c.id === i.catId).interval >= 7 && s.catalog.find(c => c.id === i.catId).weekday == null && !(s.catalog.find(c => c.id === i.catId).resp && s.catalog.find(c => c.id === i.catId).resp.mode === 'each')); };
+  const t1 = await pick();
+  await call('POST', '/action', { token: kid, body: { type: 'book', id: t1.id } });
+  const d1 = await call('POST', '/action', { token: kid, body: { type: 'complete', id: t1.id } });
+  const lid = d1.json.state.ledger.at(-1).id, pts = d1.json.state.ledger.at(-1).delta;
+  const before = L.pointsOf(nik);
+  L.setState(d1.json.state); const withPts = L.pointsOf(nik);
+  assert.equal((await call('POST', '/action', { token: kid, body: { type: 'revertDone', id: lid, mode: 'delete' } })).json.ok, false, 'Kind darf nicht');
+  // Wieder öffnen
+  const r = await call('POST', '/action', { token: owner, body: { type: 'revertDone', id: lid, mode: 'reopen' } });
+  assert.equal(r.json.ok, true, r.json.msg);
+  L.setState(r.json.state); assert.equal(L.pointsOf(nik), withPts - pts);
+  const reopened = r.json.state.inst.find(i => i.id === t1.id);
+  assert.equal(reopened.status, 'taken'); assert.equal(reopened.assignee, nik);
+  assert.ok(!r.json.state.ledger.some(l => l.id === lid));
+  // Erneut erledigen und diesmal löschen
+  const d2 = await call('POST', '/action', { token: kid, body: { type: 'complete', id: t1.id } });
+  const lid2 = d2.json.state.ledger.at(-1).id;
+  const del = await call('POST', '/action', { token: owner, body: { type: 'revertDone', id: lid2, mode: 'delete' } });
+  assert.equal(del.json.ok, true);
+  assert.ok(!del.json.state.inst.some(i => i.id === t1.id)); assert.ok(!del.json.state.ledger.some(l => l.id === lid2));
+  assert.equal((await call('POST', '/action', { token: owner, body: { type: 'revertDone', id: lid2, mode: 'delete' } })).json.ok, false, 'zweites Mal: nicht gefunden');
+});

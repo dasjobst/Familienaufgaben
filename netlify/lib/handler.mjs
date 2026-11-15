@@ -100,6 +100,7 @@ const ACTIONS = {
   restoreCat: (p, by) => L.restoreCat(p.id, by),
   saveMember: (p, by) => L.saveMember(p.data, by),
   assignOneoff: (p, by) => L.assignOneoff(p, by),
+  revertDone: (p, by) => L.revertDone(p.id, p.mode, by),
   removeMember: (p, by) => L.removeMember(p.id, by),
   setBonus: (p, by) => L.setBonus(p.value, by)
 };

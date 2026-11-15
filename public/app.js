@@ -511,6 +511,13 @@ document.addEventListener('click', async e => {
   }
   else if (a === 'approve') act('approve', { id });
   else if (a === 'more') openSheet(id);
+  else if (a === 'revertPick') {
+    const l = S.ledger.find(x => x.id === id); if (!l) return;
+    const m = L.memberById(l.member), i = l.inst ? L.instById(l.inst) : null;
+    modal('Erledigung zurücknehmen', '<p>„' + esc(l.text) + '“ von ' + esc(m ? m.name : '?') + ' (+' + l.delta + ' Punkte) aus Verlauf, Board und Punkten entfernen.</p>' +
+      (i && i.status === 'done' ? '<div class="choices" style="flex-direction:column"><label class="check"><input type="radio" name="mode" value="reopen" checked> Aufgabe wieder öffnen, sie liegt dann wieder bei ' + esc(m ? m.name : 'der Person') + '</label><label class="check"><input type="radio" name="mode" value="delete"> Aufgabe endgültig löschen</label></div>' : '<input type="hidden" name="mode" value="delete">') +
+      '<p class="hint">Die Punkte werden sofort abgezogen. Das lässt sich nicht rückgängig machen.</p>', 'Zurücknehmen', fd => act('revertDone', { id, mode: fd.mode }), true);
+  }
   else if (a === 'period') { ui.period = id; render(); }
   else if (a === 'togglePool') { ui.poolAll = !ui.poolAll; render(); }
   else if (a === 'toggleOthers') { ui.othersOpen = !ui.othersOpen; render(); }

@@ -267,7 +267,7 @@ function viewTasks() {
   if (open.length > 5) h += '<button class="btn more-btn" data-act="togglePool">' + (ui.poolAll ? 'Weniger anzeigen' : 'Alle ' + open.length + ' anzeigen') + '</button>';
   h += '</section>';
   if (others.length) h += '<section><button class="band-btn" data-act="toggleOthers" aria-expanded="' + ui.othersOpen + '"><span>Bei anderen (' + others.length + ')</span><span>' + (ui.othersOpen ? '▴' : '▾') + '</span></button>' + (ui.othersOpen ? others.map(taskCard).join('') : '') + '</section>';
-  h += '<section><div class="sec-h"><h2>Zuletzt erledigt</h2></div>' + (done.length ? '<div class="log">' + done.map(i => '<div><span>' + esc(L.catById(i.catId) ? L.catById(i.catId).name : '?') + ' · ' + esc(L.memberById(i.assignee) ? L.memberById(i.assignee).name : '?') + '</span><span class="d">+' + i.points + '</span></div>').join('') + '</div>' : '<div class="empty">Noch nichts erledigt.</div>') + '</section>';
+  h += '<section><div class="sec-h"><h2>Zuletzt erledigt</h2></div>' + (done.length ? '<div class="log">' + done.map(i => '<div><span>' + esc(L.catById(i.catId) ? L.catById(i.catId).name : '?') + ' · ' + esc(L.memberById(i.assignee) ? L.memberById(i.assignee).name : '?') + '</span><span class="d">+' + i.points + (isParent() && S.ledger.some(l => l.inst === i.id) ? ' <button class="btn icon small" data-act="revertPick" data-id="' + esc(S.ledger.find(l => l.inst === i.id).id) + '" aria-label="Erledigung zurücknehmen">⋯</button>' : '') + '</span></div>').join('') + '</div>' : '<div class="empty">Noch nichts erledigt.</div>') + '</section>';
   return h;
 }
 

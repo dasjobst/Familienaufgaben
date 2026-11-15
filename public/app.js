@@ -267,7 +267,7 @@ function viewTasks() {
   if (open.length > 5) h += '<button class="btn more-btn" data-act="togglePool">' + (ui.poolAll ? 'Weniger anzeigen' : 'Alle ' + open.length + ' anzeigen') + '</button>';
   h += '</section>';
   if (others.length) h += '<section><button class="band-btn" data-act="toggleOthers" aria-expanded="' + ui.othersOpen + '"><span>Bei anderen (' + others.length + ')</span><span>' + (ui.othersOpen ? '▴' : '▾') + '</span></button>' + (ui.othersOpen ? others.map(taskCard).join('') : '') + '</section>';
-  h += '<section><div class="sec-h"><h2>Zuletzt erledigt</h2></div>' + (done.length ? '<div class="log">' + done.map(i => '<div><span>' + esc(L.catById(i.catId) ? L.catById(i.catId).name : '?') + ' · ' + esc(L.memberById(i.assignee) ? L.memberById(i.assignee).name : '?') + '</span><span class="d">+' + i.points + (isParent() && S.ledger.some(l => l.inst === i.id) ? ' <button class="btn icon small" data-act="revertPick" data-id="' + esc(S.ledger.find(l => l.inst === i.id).id) + '" aria-label="Erledigung zurücknehmen">⋯</button>' : '') + '</span></div>').join('') + '</div>' : '<div class="empty">Noch nichts erledigt.</div>') + '</section>';
+  h += '<section><div class="sec-h"><h2>Zuletzt erledigt</h2></div>' + (done.length ? '<div class="log">' + done.map(i => '<div><span>' + esc(L.catById(i.catId) ? L.catById(i.catId).name : '?') + ' · ' + esc(L.memberById(i.assignee) ? L.memberById(i.assignee).name : '?') + '</span><span class="d">+' + i.points + (isParent() && doneEntry(i) ? ' <button class="btn icon small" data-act="revertPick" data-id="' + esc(doneEntry(i).id) + '" aria-label="Erledigung zurücknehmen">⋯</button>' : '') + '</span></div>').join('') + '</div>' : '<div class="empty">Noch nichts erledigt.</div>') + '</section>';
   return h;
 }
 
@@ -310,6 +310,7 @@ function viewCatalog() {
   return h + '</section>';
 }
 
+const doneEntry = i => S.ledger.find(l => l.inst === i.id && l.delta > 0 && l.kind !== 'missed');
 const PERIODS = [['week', 'Woche'], ['month', 'Monat'], ['all', 'Gesamt']];
 function coachLine(rows) {
   const mine = rows.find(r => r.m.id === me); if (!mine) return '';
@@ -512,7 +513,7 @@ document.addEventListener('click', async e => {
   else if (a === 'approve') act('approve', { id });
   else if (a === 'more') openSheet(id);
   else if (a === 'revertPick') {
-    const l = S.ledger.find(x => x.id === id); if (!l) return;
+    const l = S.ledger.find(x => x.id === id && x.delta > 0 && x.kind !== 'missed'); if (!l) return;
     const m = L.memberById(l.member), i = l.inst ? L.instById(l.inst) : null;
     modal('Erledigung zurücknehmen', '<p>„' + esc(l.text) + '“ von ' + esc(m ? m.name : '?') + ' (+' + l.delta + ' Punkte) aus Verlauf, Board und Punkten entfernen.</p>' +
       (i && i.status === 'done' ? '<div class="choices" style="flex-direction:column"><label class="check"><input type="radio" name="mode" value="reopen" checked> Aufgabe wieder öffnen, sie liegt dann wieder bei ' + esc(m ? m.name : 'der Person') + '</label><label class="check"><input type="radio" name="mode" value="delete"> Aufgabe endgültig löschen</label></div>' : '<input type="hidden" name="mode" value="delete">') +

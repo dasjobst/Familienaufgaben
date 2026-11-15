@@ -442,3 +442,40 @@ test('Ad-hoc-Einträge und Board: Punkte aus Minuten, letzte 25, Rücknahme', as
   const sv = await api('POST', '/action', owner, { type: 'saveCat', data: { name: 'Test', min: 40, pts: 99, interval: 7 } });
   assert.equal(sv.state.catalog.find(c => c.name === 'Test').pts, 8);
 });
+
+test('Anmeldung mit E-Mail und Passwort: setzen, einloggen, Sperre, Änderung, Reset', async () => {
+  const store = memoryStore(), env = { SETUP_CODE: 'login-setup-code-12345' };
+  const api = async (method, path, token, body) => {
+    const h = { 'content-type': 'application/json' }; if (token) h.authorization = 'Bearer ' + token;
+    const res = await handle(new Request('https://x/api' + path, { method, headers: h, body: body ? JSON.stringify(body) : undefined }), { store, env });
+    const d = await res.json(); d._status = res.status; return d;
+  };
+  const owner = (await api('POST', '/setup', null, { code: env.SETUP_CODE, name: 'Eltern', email: 'Eltern@Example.de' })).token;
+  assert.equal((await api('POST', '/login', null, { email: 'eltern@example.de', password: 'irgendwas-langes' }))._status, 401, 'ohne Passwort kein Login');
+  assert.equal((await api('POST', '/password', owner, { password: 'kurz' }))._status, 400);
+  const set = await api('POST', '/password', owner, { password: 'Sonnenblume-im-Herbst' });
+  assert.equal(set.ok, true); assert.equal(set.state.members[0].pw, true);
+  assert.equal(JSON.stringify([...store._raw.values()]).includes('Sonnenblume'), false, 'Passwort nie im Klartext');
+  const li = await api('POST', '/login', null, { email: 'ELTERN@example.de', password: 'Sonnenblume-im-Herbst' });
+  assert.equal(li.ok, true); assert.ok((await api('GET', '/state', li.token)).ok);
+  assert.equal((await api('POST', '/login', null, { email: 'nobody@example.de', password: 'Sonnenblume-im-Herbst' }))._status, 401);
+  // Ändern braucht das aktuelle Passwort und meldet andere Geräte ab
+  assert.equal((await api('POST', '/password', li.token, { password: 'Neues-Passwort-2026', current: 'falsch' }))._status, 403);
+  assert.equal((await api('POST', '/password', li.token, { password: 'Neues-Passwort-2026', current: 'Sonnenblume-im-Herbst' })).ok, true);
+  assert.equal((await api('GET', '/state', owner)).ok, false, 'altes Gerät abgemeldet');
+  assert.equal((await api('POST', '/login', null, { email: 'eltern@example.de', password: 'Sonnenblume-im-Herbst' }))._status, 401);
+  // Sperre nach 5 Fehlversuchen, auch mit richtigem Passwort
+  for (let i = 0; i < 4; i++) await api('POST', '/login', null, { email: 'eltern@example.de', password: 'falsch-falsch-' + i });
+  const locked = await api('POST', '/login', null, { email: 'eltern@example.de', password: 'Neues-Passwort-2026' });
+  assert.equal(locked._status, 429);
+  // Reset durch Eltern
+  store._raw.delete('rl/' + (await import('node:crypto')).createHash('sha256').update('eltern@example.de').digest('hex'));
+  const t2 = (await api('POST', '/login', null, { email: 'eltern@example.de', password: 'Neues-Passwort-2026' })).token;
+  const kid = (await api('POST', '/action', t2, { type: 'saveMember', data: { name: 'Kind', role: 'child', email: 'kind@example.de' } })).state.members.find(m => m.name === 'Kind').id;
+  const kt = (await api('POST', '/redeem', null, { token: (await api('POST', '/invite', t2, { memberId: kid })).url.split('#invite=')[1] })).token;
+  assert.equal((await api('POST', '/password', kt, { password: 'Gummibaerchen-am-Morgen' })).ok, true);
+  assert.equal((await api('POST', '/resetpw', kt, { memberId: kid }))._status, 403, 'Kind darf nicht zurücksetzen');
+  assert.equal((await api('POST', '/resetpw', t2, { memberId: kid })).ok, true);
+  assert.equal((await api('POST', '/login', null, { email: 'kind@example.de', password: 'Gummibaerchen-am-Morgen' }))._status, 401);
+  assert.equal((await api('GET', '/state', kt)).ok, false);
+});

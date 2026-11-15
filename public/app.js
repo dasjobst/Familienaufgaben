@@ -85,8 +85,17 @@ function showSetup() {
 }
 function showLogin(msg) {
   $('app').innerHTML = '<div class="gate"><h1>Haushaltsplaner</h1>' + (msg ? '<p class="card" role="alert">' + esc(msg) + '</p>' : '') +
-    '<p class="note">Der Zugang läuft über einen persönlichen Einladungslink. Frag ein Elternteil nach deinem Link und öffne ihn auf diesem Gerät, oder füge ihn hier ein.</p>' +
-    '<form id="loginForm" class="card"><div class="field"><label for="l_link">Einladungslink</label><input id="l_link" name="link" required autocomplete="off" placeholder="https://…/#invite=…"></div><button class="btn primary" type="submit">Anmelden</button></form></div>';
+    '<form id="pwForm" class="card"><h2>Anmelden</h2><div class="field"><label for="l_mail">E-Mail</label><input id="l_mail" name="email" type="email" inputmode="email" autocomplete="username" required></div>' +
+    '<div class="field"><label for="l_pw">Passwort</label><input id="l_pw" name="password" type="password" autocomplete="current-password" required></div>' +
+    '<button class="btn primary" type="submit">Anmelden</button></form>' +
+    '<details class="adv"><summary>Mit Einladungslink anmelden</summary><p class="note">Noch kein Passwort? Öffne den Link, den dir ein Elternteil geschickt hat, oder füge ihn hier ein. Danach kannst du unter „Familie“ ein Passwort festlegen.</p>' +
+    '<form id="loginForm"><div class="field"><label for="l_link">Einladungslink</label><input id="l_link" name="link" required autocomplete="off" placeholder="https://…/#invite=…"></div><button class="btn" type="submit">Mit Link anmelden</button></form></details></div>';
+  $('pwForm').onsubmit = async e => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target).entries());
+    const r = await api('/login', { method: 'POST', json: fd });
+    if (r.data && r.data.ok && r.data.token) { setToken(r.data.token); await refresh(); } else toast((r.data && r.data.msg) || 'Fehler.', true);
+  };
   $('loginForm').onsubmit = async e => {
     e.preventDefault();
     const v = String(new FormData(e.target).get('link') || '').trim();
@@ -356,7 +365,7 @@ function viewFamily() {
     let a = '';
     if (canPhoto) a += '<button class="btn small" data-act="photo" data-id="' + esc(m.id) + '">' + (m.photoV ? 'Foto ändern' : 'Foto hinzufügen') + '</button>';
     if (canPhoto && m.photoV) a += '<button class="btn small" data-act="photoDel" data-id="' + esc(m.id) + '">Foto entfernen</button>';
-    if (parent) a += '<button class="btn small" data-act="memEdit" data-id="' + esc(m.id) + '">Bearbeiten</button><button class="btn small" data-act="invite" data-id="' + esc(m.id) + '">Einladungslink</button><button class="btn small" data-act="revoke" data-id="' + esc(m.id) + '">Geräte abmelden</button>' + (mine ? '' : '<button class="btn small danger" data-act="memDelete" data-id="' + esc(m.id) + '">Löschen</button>');
+    if (parent) a += '<button class="btn small" data-act="memEdit" data-id="' + esc(m.id) + '">Bearbeiten</button><button class="btn small" data-act="invite" data-id="' + esc(m.id) + '">Einladungslink</button><button class="btn small" data-act="revoke" data-id="' + esc(m.id) + '">Geräte abmelden</button>' + (m.pw ? '<button class="btn small" data-act="pwReset" data-id="' + esc(m.id) + '">Passwort zurücksetzen</button>' : '') + (mine ? '' : '<button class="btn small danger" data-act="memDelete" data-id="' + esc(m.id) + '">Löschen</button>');
     return '<article class="card"><div class="top"><div class="who">' + avatar(m, 'lg') + '<div><h3>' + esc(m.name) + (mine ? ' (du)' : '') + '</h3><div class="meta">' + (m.email ? '<span>' + esc(m.email) + '</span>' : (parent || mine ? '<span>Keine E-Mail hinterlegt</span>' : '')) + '</div></div></div><span class="chip">' + (m.role === 'parent' ? 'Eltern' : 'Kind') + '</span></div>' + (a ? '<div class="actions">' + a + '</div>' : '') + '</article>';
   }).join('');
   if (parent) h += '<div class="actions"><button class="btn primary small" data-act="memNew">+ Mitglied</button></div>';
@@ -366,6 +375,10 @@ function viewFamily() {
     '<div class="field"><label for="bonus">Buchungsbonus (Faktor auf Katalogpunkte)</label><input id="bonus" type="number" min="1" max="3" step="0.1" value="' + S.bonus + '"' + (parent ? '' : ' disabled') + '></div>' + (parent ? '<div class="actions"><button class="btn small" data-act="bonusSave">Bonus speichern</button></div>' : '') +
     '<div class="field"><label for="penalty">Strafpunkte für Verpasstes (Faktor, 0 = aus)</label><input id="penalty" type="number" min="0" max="2" step="0.1" value="' + pen + '"' + (parent ? '' : ' disabled') + '></div>' + (parent ? '<div class="actions"><button class="btn small" data-act="penaltySave">Strafpunkte speichern</button></div>' : '') +
     '<p class="note">Eltern weisen zu und pflegen den Katalog. Kinder buchen, erledigen und übertragen eigene Aufgaben. Nach „Erledigt“ bleiben 2 Minuten zum Rückgängigmachen.</p></div></section>';
+  const mm = L.memberById(me);
+  h += '<section><div class="sec-h"><h2>Passwort</h2></div><div class="card">' + (mm && mm.email
+    ? '<p class="note">Anmeldung per E-Mail (' + esc(mm.email) + ') und Passwort. ' + (mm.pw ? 'Ein Passwort ist gesetzt.' : 'Noch kein Passwort gesetzt.') + '</p><div class="actions"><button class="btn small" data-act="pwSet">' + (mm.pw ? 'Passwort ändern' : 'Passwort festlegen') + '</button></div>'
+    : '<p class="note">Für die Anmeldung per Passwort braucht dein Konto eine E-Mail-Adresse. Ein Elternteil trägt sie bei dir ein.</p>') + '</div></section>';
   h += '<section><div class="sec-h"><h2>Dieses Gerät</h2></div><div class="card"><div class="actions"><button class="btn small danger" data-act="logout">Abmelden</button></div></div></section>';
   return h;
 }
@@ -452,7 +465,24 @@ document.addEventListener('click', async e => {
   else if (a === 'catDelete') { const c = L.catById(id); modal('Tätigkeit löschen', '<p>„' + esc(c.name) + '“ aus dem Katalog entfernen? Hat die Tätigkeit schon erledigte Aufgaben, wird sie archiviert und die Punktehistorie bleibt.</p>', 'Löschen', () => act('removeCat', { id }), true); }
   else if (a === 'memNew') modal('Neues Mitglied', memForm(), 'Hinzufügen', fd => act('saveMember', { data: fd }));
   else if (a === 'memEdit') { const m = L.memberById(id); modal('Mitglied bearbeiten', memForm(m) + '<input type="hidden" name="id" value="' + esc(m.id) + '">', 'Speichern', fd => act('saveMember', { data: fd })); }
-  else if (a === 'adhocNew') {
+  else if (a === 'pwSet') {
+    const has = !!L.memberById(me).pw;
+    modal(has ? 'Passwort ändern' : 'Passwort festlegen', (has ? '<div class="field"><label for="pw0">Aktuelles Passwort</label><input id="pw0" name="current" type="password" autocomplete="current-password" required></div>' : '') +
+      '<div class="field"><label for="pw1">Neues Passwort (mindestens 10 Zeichen)</label><input id="pw1" name="password" type="password" autocomplete="new-password" minlength="10" required></div>' +
+      '<div class="field"><label for="pw2">Wiederholen</label><input id="pw2" name="again" type="password" autocomplete="new-password" minlength="10" required></div><p class="hint">Eine Wortfolge ist besser als ein kurzes Passwort mit Sonderzeichen. Andere Geräte werden abgemeldet.</p>', 'Speichern', async fd => {
+      if (fd.password !== fd.again) { toast('Die beiden Passwörter sind nicht gleich.', true); return { ok: false }; }
+      const r = await api('/password', { method: 'POST', json: { password: fd.password, current: fd.current || '' } });
+      if (r.data && r.data.state) apply(r.data);
+      toast((r.data && r.data.msg) || 'Fehler.', !(r.data && r.data.ok)); return r.data || { ok: false };
+    });
+  } else if (a === 'pwReset') {
+    const m = L.memberById(id);
+    modal('Passwort zurücksetzen', '<p>Das Passwort von ' + esc(m.name) + ' wird gelöscht und alle Geräte werden abgemeldet. Danach erzeugst du einen neuen Einladungslink, mit dem die Person ein neues Passwort festlegt.</p>', 'Zurücksetzen', async () => {
+      const r = await api('/resetpw', { method: 'POST', json: { memberId: id } });
+      if (r.data && r.data.state) apply(r.data);
+      toast((r.data && r.data.msg) || 'Fehler.', !(r.data && r.data.ok)); return r.data || { ok: false };
+    }, true);
+  } else if (a === 'adhocNew') {
     const who = isParent() ? '<div class="field"><label for="h_w">Erledigt von</label><select id="h_w" name="who">' + memberOptions(me) + '</select></div>' : '';
     modal('Ad-hoc-Aufgabe eintragen', '<div class="field"><label for="h_n">Was wurde erledigt?</label><input id="h_n" name="name" required maxlength="80" placeholder="z. B. Nachbarin beim Tragen geholfen"></div><div class="field"><label for="h_m">Dauer in Minuten</label><input id="h_m" name="min" type="number" inputmode="numeric" min="1" max="480" required value="15"><span class="hint">Punkte: 5 Minuten = 1 Punkt. Der Eintrag erscheint sofort auf dem Board.</span></div>' + who, 'Eintragen', fd => act('adhoc', fd));
   } else if (a === 'entryDel') act('removeEntry', { id });

@@ -1,11 +1,22 @@
 // HTTP-Logik der API, unabhängig vom Speicher (Netlify Blobs oder Speicher-Store im Test).
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import * as L from '../../public/shared/logic.mjs';
 
 const SESSION_DAYS = 180;
 const INVITE_DAYS = 14;
 const MAX_PHOTO = 350 * 1024;
 const MAX_JSON = 20 * 1024;
+const MIN_PW = 10, MAX_PW = 200, MAX_TRIES = 5, LOCK_MS = 15 * 60 * 1000;
+
+const kdf = (pw, salt) => new Promise((res, rej) => scrypt(pw.normalize('NFKC'), salt, 64, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }, (e, k) => e ? rej(e) : res(k)));
+async function hashPw(pw) { const salt = randomBytes(16); return { s: salt.toString('base64'), h: (await kdf(pw, salt)).toString('base64') }; }
+const DUMMY = { s: randomBytes(16).toString('base64'), h: randomBytes(64).toString('base64') };
+async function checkPw(pw, rec) {
+  const r = rec || DUMMY;
+  const k = await kdf(pw, Buffer.from(r.s, 'base64'));
+  const ok = timingSafeEqual(k, Buffer.from(r.h, 'base64'));
+  return !!rec && ok;
+}
 
 class HttpError extends Error { constructor(status, msg) { super(msg); this.status = status; this.msg = msg; } }
 
@@ -118,6 +129,29 @@ export async function handle(req, { store, env }) {
       return json({ ok: true, token });
     }
 
+    // ---- Anmeldung mit E-Mail und Passwort ----
+    if (method === 'POST' && path === '/login') {
+      const b = await readJson(req);
+      const email = String(b.email || '').trim().toLowerCase(), pw = String(b.password || '');
+      const bad = () => json({ ok: false, msg: 'E-Mail oder Passwort stimmt nicht.' }, 401);
+      if (!email || !pw || pw.length > MAX_PW) return bad();
+      const st = await store.get('state', { type: 'json' });
+      if (!st) return json({ ok: true, initialized: false });
+      const rlKey = 'rl/' + sha(email);
+      const rl = (await store.get(rlKey, { type: 'json' })) || { n: 0, until: 0 };
+      if (rl.until > nowMs()) return json({ ok: false, msg: 'Zu viele Versuche. Bitte in ' + Math.ceil((rl.until - nowMs()) / 60000) + ' Minuten noch einmal probieren.' }, 429);
+      const mem = st.members.find(m => (m.email || '') === email);
+      const rec = mem ? await store.get('pw/' + mem.id, { type: 'json' }) : null;
+      const ok = await checkPw(pw, rec);
+      if (!ok || !mem) {
+        const n = (rl.until && rl.until <= nowMs() ? 0 : rl.n) + 1;
+        await store.setJSON(rlKey, n >= MAX_TRIES ? { n: 0, until: nowMs() + LOCK_MS } : { n, until: 0 });
+        return bad();
+      }
+      await store.delete(rlKey);
+      return json({ ok: true, token: await createSession(store, mem.id) });
+    }
+
     // ---- Einladungslink einlösen ----
     if (method === 'POST' && path === '/redeem') {
       const b = await readJson(req);
@@ -148,6 +182,36 @@ export async function handle(req, { store, env }) {
       return json(viewOf(res.S, me));
     }
 
+    if (method === 'POST' && path === '/password') {
+      const b = await readJson(req);
+      const pw = String(b.password || ''), curPw = String(b.current || '');
+      const mem = cur.data.members.find(m => m.id === me);
+      if (!mem.email) return json({ ok: false, msg: 'Für die Anmeldung per Passwort braucht dein Konto eine E-Mail-Adresse. Bitte ein Elternteil trägt sie unter „Familie“ ein.' }, 400);
+      if (pw.length < MIN_PW) return json({ ok: false, msg: 'Das Passwort braucht mindestens ' + MIN_PW + ' Zeichen.' }, 400);
+      if (pw.length > MAX_PW) return json({ ok: false, msg: 'Das Passwort ist zu lang.' }, 400);
+      const rec = await store.get('pw/' + me, { type: 'json' });
+      if (rec) {
+        const rlKey = 'rl/' + sha(mem.email), rl = (await store.get(rlKey, { type: 'json' })) || { n: 0, until: 0 };
+        if (rl.until > nowMs()) return json({ ok: false, msg: 'Zu viele Versuche. Bitte später noch einmal.' }, 429);
+        if (!(await checkPw(curPw, rec))) {
+          const n = rl.n + 1;
+          await store.setJSON(rlKey, n >= MAX_TRIES ? { n: 0, until: nowMs() + LOCK_MS } : { n, until: 0 });
+          return json({ ok: false, msg: 'Das aktuelle Passwort stimmt nicht.' }, 403);
+        }
+      }
+      if (pw.toLowerCase().includes(mem.email.split('@')[0]) && mem.email.split('@')[0].length >= 4) return json({ ok: false, msg: 'Das Passwort darf deinen E-Mail-Namen nicht enthalten.' }, 400);
+      await store.setJSON('pw/' + me, await hashPw(pw));
+      const res = await mutate(store, S => { const m = S.members.find(x => x.id === me); if (m) m.pw = true; return { write: !!m }; });
+      // Alle anderen Geräte abmelden
+      const list = await store.list({ prefix: 'ses/' });
+      for (const e of list.blobs) {
+        if (e.key === 'ses/' + sess.hash) continue;
+        const v = await store.get(e.key, { type: 'json' });
+        if (v && v.m === me) await store.delete(e.key);
+      }
+      return json({ ...viewOf(res.S, me), ok: true, msg: rec ? 'Passwort geändert. Andere Geräte sind abgemeldet.' : 'Passwort gesetzt. Du kannst dich jetzt mit E-Mail und Passwort anmelden.' });
+    }
+
     if (method === 'POST' && path === '/logout') {
       await store.delete('ses/' + sess.hash);
       return json({ ok: true });
@@ -165,6 +229,7 @@ export async function handle(req, { store, env }) {
       if (b.type === 'removeMember' && res.out.out.ok) {
         const gone = String(b.id || '');
         await store.delete('photo/' + gone).catch(() => {});
+        await store.delete('pw/' + gone).catch(() => {});
         for (const prefix of ['ses/', 'inv/']) {
           const list = await store.list({ prefix });
           for (const e of list.blobs) {
@@ -186,6 +251,22 @@ export async function handle(req, { store, env }) {
       const exp = nowMs() + INVITE_DAYS * 864e5;
       await store.setJSON('inv/' + sha(token), { m: mem.id, exp, used: false });
       return json({ ok: true, url: new URL(req.url).origin + '/#invite=' + token, expires: new Date(exp).toISOString(), name: mem.name, email: mem.email || '' });
+    }
+
+    if (method === 'POST' && path === '/resetpw') {
+      const b = await readJson(req);
+      if (!L.isParent(me)) return json({ ok: false, msg: 'Nur Eltern dürfen Passwörter zurücksetzen.' }, 403);
+      const target = String(b.memberId || '');
+      if (!cur.data.members.some(m => m.id === target)) return json({ ok: false, msg: 'Mitglied nicht gefunden.' }, 404);
+      await store.delete('pw/' + target);
+      const res = await mutate(store, S => { const m = S.members.find(x => x.id === target); if (m) delete m.pw; return { write: !!m }; });
+      const list = await store.list({ prefix: 'ses/' });
+      for (const e of list.blobs) {
+        if (e.key === 'ses/' + sess.hash) continue;
+        const v = await store.get(e.key, { type: 'json' });
+        if (v && v.m === target) await store.delete(e.key);
+      }
+      return json({ ...viewOf(res.S, me), ok: true, msg: 'Passwort zurückgesetzt, Geräte abgemeldet. Die Person meldet sich über einen neuen Einladungslink an und vergibt ein neues Passwort.' });
     }
 
     if (method === 'POST' && path === '/revoke') {

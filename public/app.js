@@ -325,6 +325,41 @@ function coachLine(rows) {
   const gap = above.pts - mine.pts;
   return 'Platz ' + mine.rank + '. Noch ' + gap + (gap === 1 ? ' Punkt' : ' Punkte') + ' bis ' + (above.rank === 1 ? 'zur Spitze' : 'Platz ' + above.rank) + '.';
 }
+const memberIdx = id => Math.max(0, S.members.findIndex(m => m.id === id)) % 6;
+function hm(min) { const h = Math.floor(min / 60), m = min % 60; return h ? h + ' h' + (m ? ' ' + m + ' min' : '') : m + ' min'; }
+function chartDays(st) {
+  const W = 340, H = 150, padL = 26, padB = 20, padT = 8, n = st.days.length;
+  const max = Math.max(5, ...st.days.map(d => d.sum)), top = Math.ceil(max / 4) * 4;
+  const iw = W - padL - 4, ih = H - padB - padT, bw = iw / n, gap = Math.min(6, bw * 0.25);
+  let g = '';
+  [0, 0.5, 1].forEach(f => { const y = padT + ih - ih * f; g += '<line class="gl" x1="' + padL + '" x2="' + W + '" y1="' + y + '" y2="' + y + '"/><text class="gt" x="' + (padL - 4) + '" y="' + (y + 4) + '" text-anchor="end">' + Math.round(top * f) + '</text>'; });
+  st.days.forEach((d, i) => {
+    let y = padT + ih; const x = padL + i * bw + gap / 2;
+    S.members.forEach(m => { const v = d.by[m.id]; if (!v) return; const h = ih * v / top; y -= h; g += '<rect class="s' + memberIdx(m.id) + '" x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + Math.max(2, bw - gap).toFixed(1) + '" height="' + h.toFixed(1) + '" rx="2"><title>' + esc(m.name) + ' ' + v + ' Pkt</title></rect>'; });
+    const every = n > 14 ? 5 : 1;
+    if (i % every === 0 || i === n - 1 && n <= 14) g += '<text class="gt" x="' + (x + (bw - gap) / 2).toFixed(1) + '" y="' + (H - 5) + '" text-anchor="middle">' + esc(d.label) + '</text>';
+  });
+  return '<svg viewBox="0 0 ' + W + ' ' + H + '" class="chart" role="img" aria-label="Punkte pro Zeitabschnitt, gestapelt nach Person">' + g + '</svg>';
+}
+function viewStats(period) {
+  const st = L.stats(period), k = st.kpi;
+  if (!k.n) return '<section><div class="sec-h"><h2>Statistik</h2></div><div class="empty">Noch keine erledigten Aufgaben in diesem Zeitraum. Sobald etwas erledigt ist, erscheinen hier Diagramme.</div></section>';
+  const maxWd = Math.max(1, ...st.wd), wdN = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'], best = st.wd.indexOf(Math.max(...st.wd));
+  let h = '<section><div class="sec-h"><h2>Statistik</h2></div>';
+  h += '<div class="kpis">' +
+    '<div class="kpi"><b>' + k.n + '</b><span>Aufgaben erledigt</span></div>' +
+    '<div class="kpi"><b>' + k.pts + '</b><span>Punkte erarbeitet</span></div>' +
+    '<div class="kpi"><b>' + esc(hm(k.min)) + '</b><span>Zeit investiert</span></div>' +
+    '<div class="kpi' + (k.quote !== null && k.quote < 70 ? ' bad' : '') + '"><b>' + (k.quote === null ? '–' : k.quote + ' %') + '</b><span>termingerecht' + (k.missed ? ' (' + k.missed + ' verpasst)' : '') + '</span></div></div>';
+  h += '<div class="card"><h3 class="ch">Punkte ' + (period === 'all' ? 'pro Woche' : 'pro Tag') + '</h3>' + chartDays(st) +
+    '<div class="legend">' + S.members.map(m => '<span><i class="dot c' + memberIdx(m.id) + '"></i>' + esc(m.name) + '</span>').join('') + '</div></div>';
+  const top = st.cats.slice(0, 6), rest = st.cats.slice(6).reduce((a, c) => a + c.pts, 0);
+  if (rest) top.push({ name: 'Weitere', pts: rest });
+  const maxC = Math.max(1, ...top.map(c => c.pts)), sum = st.cats.reduce((a, c) => a + c.pts, 0);
+  h += '<div class="card"><h3 class="ch">Wohin die Punkte gehen</h3><div class="hbars">' + top.map(c => '<div class="hb"><span class="hl">' + esc(c.name) + '</span><span class="hv">' + c.pts + ' Pkt · ' + Math.round(c.pts / sum * 100) + ' %</span><div class="bar"><i style="width:' + Math.max(4, Math.round(c.pts / maxC * 100)) + '%"></i></div></div>').join('') + '</div></div>';
+  h += '<div class="card"><h3 class="ch">Wann angepackt wird</h3><div class="wds">' + st.wd.map((v, i) => '<div class="wd' + (v && i === best ? ' top' : '') + '"><span class="wv">' + (v || '') + '</span><div class="wbar"><i style="height:' + Math.round(v / maxWd * 100) + '%"></i></div><span class="wl">' + wdN[i] + '</span></div>').join('') + '</div><p class="hint">Stärkster Tag: ' + wdN[best] + ' mit ' + st.wd[best] + ' Punkten.</p></div>';
+  return h + '</section>';
+}
 function viewPoints() {
   const rows = L.leaderboard(ui.period);
   const total = rows.reduce((a, r) => a + r.pts, 0), tasks = rows.reduce((a, r) => a + r.n, 0);
@@ -344,6 +379,7 @@ function viewPoints() {
   }).join('') + '</ol>';
   h += '<p class="team">Zusammen: <b>' + total + ' Punkte</b> aus <b>' + tasks + (tasks === 1 ? ' Aufgabe' : ' Aufgaben') + '</b>' + (ui.period === 'week' ? ' diese Woche' : ui.period === 'month' ? ' in diesem Monat' : ' im sichtbaren Verlauf') + '.</p>';
   h += '<p class="note">Die Rangfolge zählt erledigte Punkte im Zeitraum. Abzüge für Verpasstes mindern den Kontostand, nicht den Rang.</p></section>';
+  h += viewStats(ui.period);
   const feed = L.board(25);
   h += '<section><div class="sec-h"><h2>Zuletzt erledigt</h2><span class="count">letzte ' + feed.length + '</span></div>';
   h += feed.length ? '<div class="card feed">' + feed.map(l => {

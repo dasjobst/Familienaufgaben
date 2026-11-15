@@ -112,6 +112,28 @@ function streakOf(memberId) {
   while (days.has(d)) { n++; d = addDays(d, -1); }
   return { n, today: days.has(today()) };
 }
+const wdIdx = d => (new Date(d + 'T00:00:00Z').getUTCDay() + 6) % 7;
+function entryCat(l) {
+  if (l.cat) return l.cat;
+  const c = S.catalog.find(x => l.text.indexOf(x.name) === 0);
+  return c ? c.cat : 'Sonstiges';
+}
+export function stats(period) {
+  const from = periodStart(period), t = today();
+  const done = S.ledger.filter(l => l.delta > 0 && l.kind !== 'missed' && l.date >= from && l.date <= t);
+  const miss = S.ledger.filter(l => l.kind === 'missed' && l.date >= from && l.date <= t);
+  // Zeitleiste: Woche = Mo bis So, Monat = Tage des Monats bis heute, Gesamt = letzte 12 Wochen
+  const buckets = [];
+  if (period === 'week') for (let k = 0; k < 7; k++) { const d = addDays(from, k); buckets.push({ from: d, to: d, label: ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'][k], future: d > t }); }
+  else if (period === 'month') { for (let d = from; d <= t; d = addDays(d, 1)) buckets.push({ from: d, to: d, label: String(Number(d.slice(8))) }); }
+  else { const w0 = periodStart('week'); for (let k = 11; k >= 0; k--) { const f = addDays(w0, -7 * k); buckets.push({ from: f, to: addDays(f, 6), label: fmtDate(f).slice(0, 5) }); } }
+  const days = buckets.map(b => { const by = {}; let sum = 0; done.forEach(l => { if (l.date >= b.from && l.date <= b.to) { by[l.member] = (by[l.member] || 0) + l.delta; sum += l.delta; } }); return { ...b, by, sum }; });
+  const cats = {}; done.forEach(l => { const c = entryCat(l); (cats[c] = cats[c] || { name: c, pts: 0, n: 0 }); cats[c].pts += l.delta; cats[c].n++; });
+  const catList = Object.values(cats).sort((a, b) => b.pts - a.pts);
+  const wd = [0, 0, 0, 0, 0, 0, 0]; done.forEach(l => { wd[wdIdx(l.date)] += l.delta; });
+  const pts = done.reduce((a, l) => a + l.delta, 0), min = done.reduce((a, l) => a + (l.min || 0), 0), missed = miss.reduce((a, l) => a + (l.n || 1), 0);
+  return { from, days, cats: catList, wd, kpi: { n: done.length, pts, min, missed, quote: done.length + missed ? Math.round(done.length / (done.length + missed) * 100) : null } };
+}
 export function leaderboard(period) {
   const from = periodStart(period);
   const rows = S.members.map(m => {
@@ -344,7 +366,7 @@ function finish(i) {
   const pts = pointsFor(i), prev = i.status, before = new Set(S.inst.map(x => x.id));
   i.status = 'done'; i.doneAt = today(); i.points = pts; i.log.push('Erledigt');
   const lid = uid('l');
-  S.ledger.push({ id: lid, member: i.assignee, delta: pts, text: catById(i.catId).name + (i.mode === 'booked' ? ' (gebucht)' : ' (zugewiesen)'), date: today(), ts: Date.now(), min: catById(i.catId).min, inst: i.id });
+  S.ledger.push({ id: lid, member: i.assignee, delta: pts, text: catById(i.catId).name + (i.mode === 'booked' ? ' (gebucht)' : ' (zugewiesen)'), date: today(), ts: Date.now(), min: catById(i.catId).min, cat: catById(i.catId).cat, inst: i.id });
   refreshPool();
   i.undo = { at: Date.now(), ledgerId: lid, prev, next: S.inst.filter(x => !before.has(x.id)).map(x => x.id) };
   return pts;

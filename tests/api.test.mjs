@@ -628,3 +628,19 @@ test('Leaderboard: Rangfolge nach Zeitraum, Gleichstand, Serie, Kontostand bleib
   L.setState(done.json.state); L.refreshPool();
   assert.ok(done.json.state.ledger.length <= 500); assert.equal(L.pointsOf(nik), expected);
 });
+
+test('Statistik: Zeitleiste, Kategorien, Wochentage, Kennzahlen', async () => {
+  const { call, owner } = await setupFamily();
+  const st = (await call('GET', '/state', { token: owner })).json.state;
+  const pool = st.inst.filter(i => i.status === 'open' && !i.fixed).slice(0, 2);
+  for (const t of pool) { await call('POST', '/action', { token: owner, body: { type: 'book', id: t.id } }); await call('POST', '/action', { token: owner, body: { type: 'complete', id: t.id } }); }
+  const s2 = (await call('GET', '/state', { token: owner })).json.state; L.setState(s2);
+  const w = L.stats('week');
+  assert.equal(w.days.length, 7); assert.equal(w.days[5].label, 'Sa');
+  assert.equal(w.kpi.n, 2); assert.ok(w.kpi.pts > 0); assert.ok(w.kpi.min > 0);
+  assert.equal(w.days.reduce((a, d) => a + d.sum, 0), w.kpi.pts);
+  assert.equal(w.wd.reduce((a, x) => a + x, 0), w.kpi.pts);
+  assert.equal(w.cats.reduce((a, c) => a + c.pts, 0), w.kpi.pts);
+  assert.equal(L.stats('month').days.length, 14); assert.equal(L.stats('all').days.length, 12);
+  assert.equal(w.kpi.quote, Math.round(2 / (2 + w.kpi.missed) * 100));
+});

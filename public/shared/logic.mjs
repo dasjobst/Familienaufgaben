@@ -99,7 +99,33 @@ export function isAdmin(id) { const m = memberById(id); return !!m && m.role ===
 export function roleLabel(r) { return r === 'admin' ? 'Admin' : r === 'parent' ? 'Eltern' : 'Kind'; }
 export function activeInst(catId) { return S.inst.find(i => i.catId === catId && i.status !== 'done'); }
 export function lastDone(catId) { let l = null; S.inst.forEach(i => { if (i.catId === catId && i.status === 'done' && (!l || i.doneAt > l)) l = i.doneAt; }); return l; }
-export function pointsOf(memberId) { return S.ledger.filter(l => l.member === memberId).reduce((a, l) => a + l.delta, 0); }
+export function pointsOf(memberId) { return ((S.carry && S.carry[memberId]) || 0) + S.ledger.filter(l => l.member === memberId).reduce((a, l) => a + l.delta, 0); }
+export function periodStart(period) {
+  const t = today();
+  if (period === 'month') return t.slice(0, 8) + '01';
+  if (period === 'week') { const wd = (new Date(t + 'T00:00:00Z').getUTCDay() + 6) % 7; return addDays(t, -wd); }
+  return '0000-00-00';
+}
+function streakOf(memberId) {
+  const days = new Set(S.ledger.filter(l => l.member === memberId && l.delta > 0 && l.kind !== 'missed').map(l => l.date));
+  let d = days.has(today()) ? today() : addDays(today(), -1), n = 0;
+  while (days.has(d)) { n++; d = addDays(d, -1); }
+  return { n, today: days.has(today()) };
+}
+export function leaderboard(period) {
+  const from = periodStart(period);
+  const rows = S.members.map(m => {
+    let pts = 0, n = 0, lost = 0;
+    S.ledger.forEach(l => {
+      if (l.member !== m.id || l.date < from) return;
+      if (l.kind === 'missed') lost += -l.delta; else if (l.delta > 0) { pts += l.delta; n++; }
+    });
+    return { m, pts, n, lost, total: pointsOf(m.id), streak: streakOf(m.id) };
+  }).sort((a, b) => b.pts - a.pts || b.n - a.n || a.m.name.localeCompare(b.m.name, 'de'));
+  let rank = 0, prev = null;
+  rows.forEach((r, i) => { if (prev === null || r.pts !== prev) rank = i + 1; r.rank = r.pts > 0 ? rank : 0; prev = r.pts; });
+  return rows;
+}
 export function pointsFor(inst) { const c = catById(inst.catId); const base = c ? c.pts : 0; return inst.mode === 'booked' ? Math.round(base * S.bonus) : base; }
 function err(msg) { return { ok: false, msg }; }
 function ok(msg, extra) { return Object.assign({ ok: true, msg: msg || '' }, extra || {}); }
@@ -243,7 +269,11 @@ export function refreshPool() {
   const before = S.inst.length;
   S.inst = S.inst.filter(i => i.status !== 'done' || keep.has(i.id) || diffDays(today(), i.doneAt) <= 120);
   S.catalog = S.catalog.filter(c => !c.oneoff || S.inst.some(i => i.catId === c.id));
-  if (S.ledger.length > 500) S.ledger = S.ledger.slice(-500);
+  if (S.ledger.length > 500) {
+    const drop = S.ledger.slice(0, S.ledger.length - 500); S.carry = S.carry || {};
+    drop.forEach(l => { S.carry[l.member] = (S.carry[l.member] || 0) + l.delta; });
+    S.ledger = S.ledger.slice(-500);
+  }
   return n + (before - S.inst.length);
 }
 
@@ -252,7 +282,9 @@ export function book(instId, by) {
   if (!memberById(by)) return err('Person nicht gefunden.');
   if (i.status !== 'open') return err('Diese Aufgabe ist schon vergeben.');
   i.status = 'taken'; i.assignee = by; i.mode = 'booked'; i.log.push('Selbst gebucht von ' + memberById(by).name);
-  return ok('Gebucht: ' + pointsFor(i) + ' Punkte bei Erledigung.');
+  // Nach dem Buchen bleibt mindestens ein Tag Zeit, auch wenn die Aufgabe im Pool schon überfällig war.
+  const minDue = addDays(today(), 1); if (i.due < minDue) i.due = minDue;
+  return ok('Gebucht: ' + pointsFor(i) + ' Punkte bei Erledigung, ' + dueText(i.due) + '.');
 }
 export function assignInst(instId, toId, by) {
   if (!isParent(by)) return err('Nur Eltern dürfen zuweisen.');
@@ -298,7 +330,6 @@ export function release(instId, by) {
   if (i.status !== 'taken' || i.mode !== 'booked') return err('Nur selbst gebuchte Aufgaben lassen sich aufheben. Zugewiesene werden übertragen.');
   const self = by === i.assignee, was = memberById(i.assignee), who = memberById(by);
   if (!self && !isParent(by)) return err('Nur die Person selbst oder Eltern dürfen eine Buchung aufheben.');
-  if (self && diffDays(i.due, today()) < 0) return err('Überfällige Aufgaben lassen sich nicht mehr zurückgeben. Übertrage sie stattdessen.');
   let refund = 0;
   if (!self) {
     // Entscheidung der Eltern: Strafpunkte dieser Buchung entfallen
@@ -448,6 +479,7 @@ export function removeMember(id, by) {
     return true;
   });
   S.ledger = S.ledger.filter(l => l.member !== id);
+  if (S.carry) delete S.carry[id];
   S.catalog.forEach(c => {
     if (c.resp && c.resp.mode === 'each' && c.resp.who === 'custom') {
       c.resp.ids = (c.resp.ids || []).filter(x => x !== id);

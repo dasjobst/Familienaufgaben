@@ -581,16 +581,50 @@ test('Buchung aufheben: selbst nur vor Fälligkeit, Eltern jederzeit mit Rücker
   await call('POST', '/action', { token: owner, body: { type: 'book', id: t.id } });
   assert.equal((await call('POST', '/action', { token: kid, body: { type: 'release', id: t.id } })).json.ok, false);
   await call('POST', '/action', { token: owner, body: { type: 'release', id: t.id } });
-  // Überfällig: selbst nicht, Eltern ja und Strafpunkte kommen zurück
+  // Überfällig: auch das Kind selbst darf zurückgeben, die Strafpunkte bleiben dann bestehen
   await call('POST', '/action', { token: kid, body: { type: 'book', id: t.id } });
-  const c = st.catalog.find(x => x.id === t.catId);
   L.setNow(L.addDays('2026-11-14', 4));
   const late = (await call('GET', '/state', { token: kid })).json.state;
   const pen = late.ledger.filter(l => l.kind === 'missed' && l.inst === t.id).length;
   assert.ok(pen > 0, 'Strafpunkte entstanden');
-  assert.equal((await call('POST', '/action', { token: kid, body: { type: 'release', id: t.id } })).json.ok, false);
+  const self = await call('POST', '/action', { token: kid, body: { type: 'release', id: t.id } });
+  assert.equal(self.json.ok, true, self.json.msg);
+  assert.ok(self.json.state.ledger.some(l => l.kind === 'missed' && l.inst === t.id), 'Strafpunkte bleiben bei Rückgabe durch die Person');
+  // Neu buchen: überfällige Pool-Aufgabe bekommt einen Tag Zeit
+  const rb = await call('POST', '/action', { token: kid, body: { type: 'book', id: t.id } });
+  assert.equal(rb.json.state.inst.find(i => i.id === t.id).due, L.addDays(L.today(), 1));
+  // Eltern heben die überfällig gewordene Buchung auf: Strafpunkte kommen zurück
+  L.setNow(L.addDays(L.today(), 3));
+  await call('GET', '/state', { token: owner });
   const rel = await call('POST', '/action', { token: owner, body: { type: 'release', id: t.id } });
   L.setNow('2026-11-14');
   assert.equal(rel.json.ok, true, rel.json.msg);
   assert.ok(!rel.json.state.ledger.some(l => l.kind === 'missed' && l.inst === t.id), 'Strafpunkte erstattet');
+});
+
+test('Leaderboard: Rangfolge nach Zeitraum, Gleichstand, Serie, Kontostand bleibt bei Kürzung des Verlaufs', async () => {
+  const { call, owner } = await setupFamily();
+  const nik = await addMember(call, owner, 'Nikolas', 'child', '');
+  const kid = (await login(call, owner, nik)).token;
+  const st = (await call('GET', '/state', { token: kid })).json.state;
+  const t = st.inst.find(i => i.status === 'open');
+  await call('POST', '/action', { token: kid, body: { type: 'book', id: t.id } });
+  const done = await call('POST', '/action', { token: kid, body: { type: 'complete', id: t.id } });
+  L.setState(done.json.state);
+  const lb = L.leaderboard('week');
+  assert.equal(lb[0].m.id, nik); assert.equal(lb[0].rank, 1); assert.ok(lb[0].pts > 0); assert.equal(lb[0].n, 1);
+  assert.equal(lb[1].rank, 0, 'ohne Punkte kein Rang');
+  assert.equal(lb[0].streak.n, 1); assert.equal(lb[0].streak.today, true);
+  assert.equal(L.periodStart('week'), '2026-11-09'); assert.equal(L.periodStart('month'), '2026-11-01');
+  // Eintrag von letzter Woche zählt nicht in die Woche, aber im Monat
+  done.json.state.ledger.push({ id: 'x1', member: lb[1].m.id, delta: 7, text: 'alt', date: '2026-11-03' });
+  L.setState(done.json.state);
+  assert.equal(L.leaderboard('week').find(r => r.m.id === lb[1].m.id).pts, 0);
+  assert.equal(L.leaderboard('month').find(r => r.m.id === lb[1].m.id).pts, 7);
+  // Kontostand bleibt bei Kürzung des Verlaufs erhalten
+  const before = L.pointsOf(nik);
+  for (let i = 0; i < 520; i++) done.json.state.ledger.push({ id: 'f' + i, member: nik, delta: 1, text: 'x', date: '2026-10-01' });
+  const expected = before + 520;
+  L.setState(done.json.state); L.refreshPool();
+  assert.ok(done.json.state.ledger.length <= 500); assert.equal(L.pointsOf(nik), expected);
 });

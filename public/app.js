@@ -6,7 +6,7 @@ try { token = localStorage.getItem(KEY); } catch (e) { /* ohne Speicher: Anmeldu
 let S = null, me = null, lastJson = '';
 let tab = 'tasks';
 const filt = { q: '', cat: '', archive: false };
-const ui = { poolAll: false, othersOpen: false, unclaimedOpen: false, bands: new Set() };
+const ui = { period: 'week', poolAll: false, othersOpen: false, unclaimedOpen: false, bands: new Set() };
 const photos = new Map();
 const inflight = new Set();
 let photoTarget = null;
@@ -211,7 +211,7 @@ function moreItems(i) {
   if (i.status === 'open' && p) items.push(['assignPick', 'Zuweisen an …']);
   if (i.status === 'taken') {
     if (mine || p) items.push(['transferPick', 'Übertragen']);
-    if (i.mode === 'booked' && mine && overdue(i) === 0) items.push(['release', 'Zurück in den Pool']);
+    if (i.mode === 'booked' && mine) items.push(['release', 'Zurück in den Pool']);
     else if (i.mode === 'booked' && !mine && p) items.push(['releasePick', 'Buchung aufheben']);
   }
   if (p && i.status !== 'done') items.push(['instDelete', 'Löschen', true]);
@@ -310,18 +310,47 @@ function viewCatalog() {
   return h + '</section>';
 }
 
+const PERIODS = [['week', 'Woche'], ['month', 'Monat'], ['all', 'Gesamt']];
+function coachLine(rows) {
+  const mine = rows.find(r => r.m.id === me); if (!mine) return '';
+  const lead = rows.filter(r => r.rank === 1);
+  if (!rows.some(r => r.pts > 0)) return 'Noch keine Punkte in diesem Zeitraum. Buche eine Aufgabe und starte vorn.';
+  if (mine.pts === 0) return 'Du hast noch keine Punkte. Schon eine kleine Aufgabe bringt dich aufs Treppchen.';
+  if (mine.rank === 1) {
+    const next = rows.find(r => r.rank !== 1 && r.pts > 0);
+    if (lead.length > 1) return 'Gleichauf an der Spitze. Eine Aufgabe mehr entscheidet.';
+    return 'Du führst' + (next ? ' mit ' + (mine.pts - next.pts) + ' Punkten Vorsprung vor ' + next.m.name : '') + '. Halte die Spitze!';
+  }
+  const above = rows.filter(r => r.rank > 0 && r.rank < mine.rank).pop();
+  const gap = above.pts - mine.pts;
+  return 'Platz ' + mine.rank + '. Noch ' + gap + (gap === 1 ? ' Punkt' : ' Punkte') + ' bis ' + (above.rank === 1 ? 'zur Spitze' : 'Platz ' + above.rank) + '.';
+}
 function viewPoints() {
-  const rows = S.members.map(m => ({ m, p: L.pointsOf(m.id), miss: L.missedStats(m.id, 30) })).sort((a, b) => b.p - a.p);
-  const max = Math.max(1, ...rows.map(r => r.p));
-  let h = '<section><div class="sec-h"><h2>Board</h2></div>';
+  const rows = L.leaderboard(ui.period);
+  const total = rows.reduce((a, r) => a + r.pts, 0), tasks = rows.reduce((a, r) => a + r.n, 0);
+  const max = Math.max(1, ...rows.map(r => r.pts));
+  const mine = rows.find(r => r.m.id === me);
+  let h = '<section><div class="sec-h"><h2>Leaderboard</h2></div>' +
+    '<div class="seg" role="tablist" aria-label="Zeitraum">' + PERIODS.map(p => '<button role="tab" aria-selected="' + (ui.period === p[0]) + '" data-act="period" data-id="' + p[0] + '"' + (ui.period === p[0] ? ' class="on"' : '') + '>' + p[1] + '</button>').join('') + '</div>';
+  h += '<div class="coach"><b>' + esc(coachLine(rows)) + '</b>' + (mine && mine.streak.n >= 1 ? '<span class="streak">🔥 ' + mine.streak.n + (mine.streak.n === 1 ? ' Tag' : ' Tage') + ' in Folge' + (mine.streak.today ? '' : ' · heute noch eine Aufgabe hält die Serie') + '</span>' : '') + '</div>';
+  h += '<ol class="lb">' + rows.map(r => {
+    const medal = r.rank >= 1 && r.rank <= 3 ? ' m' + r.rank : '';
+    const pct = Math.round(r.pts / max * 100);
+    return '<li class="lrow' + (r.m.id === me ? ' mine' : '') + medal + '"><span class="rk">' + (r.rank || '–') + '</span>' + avatar(r.m, 'lg') +
+      '<div class="lm"><div class="lt"><b class="nm">' + esc(r.m.name) + (r.m.id === me ? ' (du)' : '') + '</b>' + (r.streak.n >= 2 ? '<span class="fl" title="Serie">🔥' + r.streak.n + '</span>' : '') + '</div>' +
+      '<div class="bar"><i style="width:' + (r.pts > 0 ? Math.max(6, pct) : 0) + '%"></i></div>' +
+      '<div class="hint">' + r.n + (r.n === 1 ? ' Aufgabe' : ' Aufgaben') + ' · Konto ' + String(r.total).replace('-', '−') + '</div>' + (r.lost ? '<div class="hint neg">−' + r.lost + ' Punkte Abzug</div>' : '') + '</div>' +
+      '<span class="sc">' + r.pts + '<small>Pkt</small></span></li>';
+  }).join('') + '</ol>';
+  h += '<p class="team">Zusammen: <b>' + total + ' Punkte</b> aus <b>' + tasks + (tasks === 1 ? ' Aufgabe' : ' Aufgaben') + '</b>' + (ui.period === 'week' ? ' diese Woche' : ui.period === 'month' ? ' in diesem Monat' : ' im sichtbaren Verlauf') + '.</p>';
+  h += '<p class="note">Die Rangfolge zählt erledigte Punkte im Zeitraum. Abzüge für Verpasstes mindern den Kontostand, nicht den Rang.</p></section>';
   const feed = L.board(25);
-  h += '<div class="sec-h"><h2>Zuletzt erledigt</h2><span class="count">letzte ' + feed.length + '</span></div>';
+  h += '<section><div class="sec-h"><h2>Zuletzt erledigt</h2><span class="count">letzte ' + feed.length + '</span></div>';
   h += feed.length ? '<div class="card feed">' + feed.map(l => {
     const m = L.memberById(l.member);
-    return '<div class="frow">' + avatar(m, 'sm') + '<div class="t"><b>' + esc(l.text) + '</b><div class="hint">' + esc(m ? m.name : 'Gelöscht') + ' · ' + esc(L.stampText(l)) + (l.min ? ' · ' + l.min + ' Min.' : '') + + '</div></div><div class="fr"><span class="pts">+' + l.delta + '</span>' + '' + '</div></div>';
-  }).join('') + '</div>' : '<div class="empty">Noch nichts erledigt.</div>';
-  h += '<div class="sec-h"><h2>Punktestand</h2></div><div class="card rank">' + rows.map(r => '<div class="r"><span class="who">' + avatar(r.m) + '<span class="nm">' + esc(r.m.name) + '</span></span><span class="sc' + (r.p < 0 ? ' neg' : '') + '">' + r.p + '</span><div class="bar"><i style="width:' + Math.max(2, Math.round(Math.max(0, r.p) / max * 100)) + '%"></i></div>' + (r.miss.n ? '<span class="hint" style="grid-column:1/-1">Verpasst in 30 Tagen: ' + r.miss.n + '× (−' + r.miss.pts + ' Punkte)</span>' : '') + '</div>').join('') + '</div>';
-  h += '<p class="note">Punkte entstehen aus der Zeit: 5 Minuten = 1 Punkt. Selbst gebuchte Aufgaben zählen ×' + S.bonus + ', zugewiesene und Ad-hoc-Aufgaben ×1. Verpasste Aufgaben kosten ×' + (S.penalty === undefined ? 0.5 : S.penalty) + ' ihres Werts.</p></section>';
+    return '<div class="frow">' + avatar(m, 'sm') + '<div class="t"><b>' + esc(l.text) + '</b><div class="hint">' + esc(m ? m.name : 'Gelöscht') + ' · ' + esc(L.stampText(l)) + (l.min ? ' · ' + l.min + ' Min.' : '') + '</div></div><div class="fr"><span class="pts">+' + l.delta + '</span></div></div>';
+  }).join('') + '</div>' : '<div class="empty">Noch nichts erledigt. Die erste Aufgabe steht ganz oben.</div>';
+  h += '</section>';
   const lg = S.ledger.filter(l => l.kind === 'missed').slice(-10).reverse();
   if (lg.length) h += '<section><div class="sec-h"><h2>Abzüge</h2></div><div class="log">' + lg.map(l => '<div><span>' + esc(L.memberById(l.member) ? L.memberById(l.member).name : '?') + ' · ' + esc(l.text) + '</span><span class="d neg">' + l.delta + '</span></div>').join('') + '</div></section>';
   return h;
@@ -446,6 +475,7 @@ document.addEventListener('click', async e => {
   }
   else if (a === 'approve') act('approve', { id });
   else if (a === 'more') openSheet(id);
+  else if (a === 'period') { ui.period = id; render(); }
   else if (a === 'togglePool') { ui.poolAll = !ui.poolAll; render(); }
   else if (a === 'toggleOthers') { ui.othersOpen = !ui.othersOpen; render(); }
   else if (a === 'toggleUnclaimed') { ui.unclaimedOpen = !ui.unclaimedOpen; render(); }

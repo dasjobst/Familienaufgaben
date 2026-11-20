@@ -37,7 +37,7 @@ test('Oberfläche rendert alle Ansichten für Eltern und Kind ohne Fehler', asyn
   await import('../public/app.js?parent');
   await settle(); await settle();
   assert.match(els.app.innerHTML, /Meine Aufgaben/);
-  for (const [tab, needle] of [['catalog', 'Eigene Tätigkeit'], ['points', 'Leaderboard'], ['esc', 'Eskalationsboard'], ['family', 'Einladungslink'], ['tasks', 'Pool']]) {
+  for (const [tab, needle] of [['catalog', 'Eigene Tätigkeit'], ['points', 'Rangliste'], ['esc', 'Überfällig'], ['family', 'Einladungslink'], ['tasks', 'Pool']]) {
     click({ tab }); assert.ok(els.app.innerHTML.includes(needle), tab + ' zeigt ' + needle);
   }
   click({ tab: 'catalog' });

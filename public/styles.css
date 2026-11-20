@@ -206,3 +206,15 @@ details.adv[open]{padding-bottom:12px;display:flex;flex-direction:column;gap:12p
 .wd.top .wbar i{background:var(--c1)}
 .wd .wv{font-size:12px;color:var(--muted);min-height:14px;font-variant-numeric:tabular-nums}
 .wd .wl{font-size:12px;color:var(--muted)}
+
+/* Tagesfortschritt und Belohnungsmoment */
+.goal{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:10px 14px;display:flex;flex-direction:column;gap:8px}
+.goal .gl2{display:flex;justify-content:space-between;gap:8px;font-size:15px}
+.goal .gl2 span{color:var(--muted)}
+.goal .bar{height:10px;background:var(--line);border-radius:999px;overflow:hidden}
+.goal .bar i{display:block;height:100%;background:var(--accent);border-radius:999px;transition:width .4s ease}
+.goal.ok{background:var(--accent-soft);border-color:transparent}
+.goal.ok .gl2 b{color:var(--accent)}
+.toast.win{background:var(--accent);color:var(--accent-ink);font-weight:600;animation:pop .35s cubic-bezier(.2,1.4,.4,1)}
+@keyframes pop{0%{transform:translateX(-50%) scale(.85);opacity:0}100%{transform:translateX(-50%) scale(1);opacity:1}}
+@media (prefers-reduced-motion:reduce){.toast.win{animation:none}.goal .bar i{transition:none}}

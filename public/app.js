@@ -14,8 +14,8 @@ let photoTarget = null;
 const $ = id => document.getElementById(id);
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function setToken(t) { token = t; try { if (t) localStorage.setItem(KEY, t); else localStorage.removeItem(KEY); } catch (e) { /* egal */ } }
-function toast(msg, bad, action) {
-  const t = document.createElement('div'); t.className = 'toast' + (bad ? ' err' : ''); t.setAttribute('role', 'status');
+function toast(msg, bad, action, cls) {
+  const t = document.createElement('div'); t.className = 'toast' + (bad ? ' err' : '') + (cls ? ' ' + cls : ''); t.setAttribute('role', 'status');
   const span = document.createElement('span'); span.textContent = msg; t.appendChild(span);
   if (action) {
     const b = document.createElement('button'); b.className = 'toast-btn'; b.textContent = action.label;
@@ -116,7 +116,10 @@ async function act(type, payload = {}) {
   if (r.status === 401) { setToken(null); showLogin('Deine Anmeldung ist abgelaufen.'); return { ok: false }; }
   const d = r.data || { ok: false, msg: 'Fehler.' };
   if (d.state) apply(d);
-  toast(d.msg || (d.ok ? 'Fertig.' : 'Fehler.'), !d.ok, d.ok && d.undo ? { label: 'Rückgängig', fn: () => act('undo', { id: d.undo }) } : null);
+  const win = d.ok && (type === 'complete' || type === 'approve') && d.pts > 0;
+  let msg = d.msg || (d.ok ? 'Fertig.' : 'Fehler.');
+  if (win && S) { const g = dayGoal(me); if (g.total > 0 && g.left === 0) msg += ' Alles für heute geschafft!'; }
+  toast(win ? '✓ ' + msg : msg, !d.ok, d.ok && d.undo ? { label: 'Rückgängig', fn: () => act('undo', { id: d.undo }) } : null, win ? 'win' : '');
   return d;
 }
 
@@ -192,6 +195,12 @@ function memberOptions(sel, excl) { return S.members.filter(m => m.id !== excl).
 const isParent = () => L.isParent(me);
 
 /* ---------- Aufgaben: gemeinsame Bausteine ---------- */
+function dayGoal(id) {
+  const t = L.today();
+  const done = S.ledger.filter(l => l.member === id && l.delta > 0 && l.kind !== 'missed' && l.date === t).length;
+  const left = S.inst.filter(i => (i.status === 'taken' || i.status === 'review') && i.assignee === id && i.due <= t).length;
+  return { done, left, total: done + left };
+}
 const overdue = i => Math.max(0, -L.diffDays(i.due, L.today()));
 const sevClass = n => n >= 3 ? 'late' : 'warn';
 function dueSpan(i) {
@@ -217,10 +226,17 @@ function moreItems(i) {
   if (p && i.status !== 'done') items.push(['instDelete', 'Löschen', true]);
   return items;
 }
-function moreBtn(i) { return moreItems(i).length ? '<button class="btn icon" data-act="more" data-id="' + esc(i.id) + '" aria-label="Weitere Aktionen">⋯</button>' : ''; }
+function moreBtn(i) {
+  const items = moreItems(i); if (!items.length) return '';
+  const first = items.find(it => !it[2]), rest = items.filter(it => it !== first);
+  let h = '';
+  if (first) h += '<button class="btn small" data-act="' + first[0] + '" data-id="' + esc(i.id) + '">' + esc(first[1].replace(' …', '')) + '</button>';
+  if (rest.length) h += '<button class="btn small" data-act="more" data-id="' + esc(i.id) + '">Mehr ▾</button>';
+  return h;
+}
 function openSheet(id) {
   const i = L.instById(id); if (!i) return;
-  const c = L.catById(i.catId), items = moreItems(i);
+  const c = L.catById(i.catId), all = moreItems(i), items = all.length > 1 ? all.slice(all.findIndex(it => !it[2]) === 0 ? 1 : 0) : all;
   $('layer').innerHTML = '<div class="overlay" id="ov"><div class="modal sheet" role="dialog" aria-modal="true" aria-label="Weitere Aktionen"><h2>' + esc(c.name) + '</h2><div class="actions">' +
     items.map(it => '<button class="btn' + (it[2] ? ' danger' : '') + '" data-sheet data-act="' + it[0] + '" data-id="' + esc(id) + '">' + esc(it[1]) + '</button>').join('') +
     '</div><button class="btn" id="mc">Schließen</button></div></div>';
@@ -259,7 +275,8 @@ function viewTasks() {
     h += '<section><article class="card guide"><h3>So startest du</h3><ol><li>Unter „Familie“ Mitglieder anlegen, Rolle und E-Mail eintragen.</li><li>Pro Mitglied einen Einladungslink erzeugen und verschicken.</li><li>Im Katalog Tätigkeiten prüfen und eigene ergänzen.</li></ol><div class="actions"><button class="btn primary small" data-tab="family">Mitglieder anlegen</button></div></article></section>';
   }
   if (reviews.length) h += '<section><div class="sec-h"><h2>Wartet auf Check</h2><span class="count">' + reviews.length + '</span></div>' + reviews.map(taskCard).join('') + '</section>';
-  h += '<section><div class="sec-h"><h2>Meine Aufgaben</h2><span class="count">' + mine.length + '</span></div>' + (mine.length ? mine.map(taskCard).join('') : '<div class="empty">Nichts offen. Buche eine Aufgabe aus dem Pool und sammle mehr Punkte als bei einer Zuweisung.</div>') + '</section>';
+  const g = dayGoal(me), pct = g.total ? Math.round(g.done / g.total * 100) : 0;
+  h += '<section><div class="sec-h"><h2>Meine Aufgaben</h2><span class="count">' + mine.length + '</span></div>' + (g.total ? '<div class="goal' + (g.left === 0 ? ' ok' : '') + '"><div class="gl2"><b>' + (g.left === 0 ? 'Alles für heute geschafft ✓' : 'Heute: ' + g.done + ' von ' + g.total + ' erledigt') + '</b>' + (g.left ? '<span>noch ' + g.left + '</span>' : '') + '</div><div class="bar"><i style="width:' + Math.max(g.done ? 6 : 0, pct) + '%"></i></div></div>' : '') + (mine.length ? mine.map(taskCard).join('') : '<div class="empty">Nichts offen. Buche eine Aufgabe aus dem Pool und sammle mehr Punkte als bei einer Zuweisung.</div>') + '</section>';
   const shown = ui.poolAll ? open : open.slice(0, 5);
   h += '<section><div class="sec-h"><h2>Pool</h2><span class="count">' + open.length + '</span></div>';
   if (p) h += '<div class="actions"><button class="btn small" data-act="assignNew">+ Aufgabe zuweisen</button><button class="btn small" data-act="oneoffNew">+ Ad-hoc-Aufgabe</button></div>';
@@ -366,7 +383,7 @@ function viewPoints() {
   const total = rows.reduce((a, r) => a + r.pts, 0), tasks = rows.reduce((a, r) => a + r.n, 0);
   const max = Math.max(1, ...rows.map(r => r.pts));
   const mine = rows.find(r => r.m.id === me);
-  let h = '<section><div class="sec-h"><h2>Leaderboard</h2></div>' +
+  let h = '<section><div class="sec-h"><h2>Rangliste</h2></div>' +
     '<div class="seg" role="tablist" aria-label="Zeitraum">' + PERIODS.map(p => '<button role="tab" aria-selected="' + (ui.period === p[0]) + '" data-act="period" data-id="' + p[0] + '"' + (ui.period === p[0] ? ' class="on"' : '') + '>' + p[1] + '</button>').join('') + '</div>';
   h += '<div class="coach"><b>' + esc(coachLine(rows)) + '</b>' + (mine && mine.streak.n >= 1 ? '<span class="streak">🔥 ' + mine.streak.n + (mine.streak.n === 1 ? ' Tag' : ' Tage') + ' in Folge' + (mine.streak.today ? '' : ' · heute noch eine Aufgabe hält die Serie') + '</span>' : '') + '</div>';
   h += '<ol class="lb">' + rows.map(r => {
@@ -403,8 +420,8 @@ function viewEscalation() {
   const groups = {};
   named.forEach(i => { (groups[i.assignee] ||= []).push(i); });
   const order = Object.keys(groups).sort((a, b) => groups[b].length - groups[a].length || Math.max(...groups[b].map(overdue)) - Math.max(...groups[a].map(overdue)));
-  let h = '<section><div class="sec-h"><h2>Eskalationsboard</h2><span class="count">' + list.length + ' überfällig</span></div>';
-  h += '<p class="note">Wer eine Aufgabe nicht rechtzeitig erledigt, steht hier mit Namen. Ab 3 Tagen Verzug wird es rot. Verpasste Aufgaben kosten Punkte.</p>';
+  let h = '<section><div class="sec-h"><h2>Überfällig</h2><span class="count">' + list.length + ' überfällig</span></div>';
+  h += '<p class="note">Hier steht, was liegen geblieben ist, mit Namen. Ab 3 Tagen Verzug wird es rot. Verpasste Aufgaben kosten Punkte.</p>';
   if (order.length) h += '<div class="meta">' + order.map(id => { const m = L.memberById(id), mx = Math.max(...groups[id].map(overdue)); return '<span class="chip ' + sevClass(mx) + '">' + esc(m.name) + ': ' + groups[id].length + '</span>'; }).join('') + '</div>';
   h += order.map(id => {
     const m = L.memberById(id), items = groups[id], mx = Math.max(...items.map(overdue)), miss = L.missedStats(id, 30);
@@ -456,7 +473,8 @@ function render() {
   const all = L.escalations().length;
   const mineLate = S.inst.filter(i => i.status === 'taken' && i.assignee === me && overdue(i) > 0).length;
   const mm = L.memberById(me);
-  const tabs = [['tasks', 'Aufgaben'], ['catalog', 'Katalog'], ['points', 'Board'], ['esc', 'Eskalation'], ['family', 'Familie']];
+  const tabs = [['tasks', 'Aufgaben'], ['catalog', 'Katalog'], ['points', 'Rangliste'], ['esc', 'Überfällig'], ['family', 'Familie']].filter(t => t[0] !== 'catalog' || isParent());
+  if (tab === 'catalog' && !isParent()) tab = 'tasks';
   const keep = document.activeElement && document.activeElement.id;
   const v = { tasks: viewTasks, catalog: viewCatalog, points: viewPoints, esc: viewEscalation, family: viewFamily }[tab];
   const pts = L.pointsOf(me);
